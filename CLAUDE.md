@@ -30,10 +30,12 @@ red-flag rules, fee taxonomy, negotiation levers, honesty policy.
 the domain base sheet; `negotiator/packgen.py` lets the AI WRITE a new sheet
 (OpenAI, validated, `python -m negotiator.packgen --vertical hvac --area 28203` or
 `POST /api/verticals/generate`). The intake form = sheet base questions **+
-learned questions** (`learned_questions` table, per vertical+area): at the end of
-each intake the estimator logs newly-discovered price factors via
-`log_learned_questions`, they surface to the user on the job and join every future
-form in that area (`get_intake_form` tool + `GET /api/intake-form`).
+learned questions** (`learned_questions` table, per vertical+area). Decision
+(Andrea, 2026-07-18): new price factors are discovered on VENDOR calls (caller
+phase — `log_learned_questions` wiring there is TODO), NEVER asked of the
+customer; the estimator only CONSUMES the pool via `get_intake_form`. Learned
+questions surface to the user on the job and join every future form in that area
+(`GET /api/intake-form`).
 `agents/prompts.py` GENERATES all system prompts from the sheet (estimator /
 caller / closer + one per counterparty persona in `agents/personas.yaml`).
 `agents/provision.py` upserts 6 agents + 7 webhook tools to ElevenLabs (ids cached
@@ -79,9 +81,10 @@ NOT yet done (needs Andrea's API keys / mic — in order):
 4. Voice modes need `brew install portaudio && pip install pyaudio`.
 5. First live `packgen` run (e.g. `--vertical hvac --area 28203`) — the "AI writes the
    config sheet" demo beat; validate output loads before showing it.
-6. `docs/LOVABLE_PROMPT.md` + `docs/DEMO_SCRIPT.md` are still moving-era: update for
-   plumbing MVP + the intake-form endpoint (`GET /api/intake-form`) + learned-questions
-   beat BEFORE pasting into Lovable / rehearsing. Frontend comes last (Andrea's order).
+6. `docs/LOVABLE_PROMPT.md` is rewritten for the domain-sheet backend (jobs list,
+   schema-driven intake form + learned questions, domains page with AI generation)
+   and has the live tunnel URL baked in — update API_BASE in Lovable if the tunnel
+   restarts. `docs/DEMO_SCRIPT.md` is still moving-era: refresh before rehearsing.
 
 ## Commands
 
