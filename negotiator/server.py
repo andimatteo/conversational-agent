@@ -44,9 +44,33 @@ def create_job(body: JobCreate | None = None):
     return job
 
 
+@app.get("/api/jobs")
+def list_jobs():
+    jobs = db.where("jobs")
+    return sorted(jobs, key=lambda j: j.get("created_at", ""), reverse=True)
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
     return _job(job_id)
+
+
+class SpecBody(BaseModel):
+    spec: dict
+
+
+@app.put("/api/jobs/{job_id}/spec")
+def put_spec(job_id: str, body: SpecBody):
+    """The web intake form's door — same rules as the voice interview:
+    any spec change resets user confirmation."""
+    job = _job(job_id)
+    job["spec"] = {**job["spec"], **body.spec}
+    if "form" not in job["spec_source"]:
+        job["spec_source"] = (job["spec_source"] + "+form").lstrip("+")
+    job["confirmed"] = False
+    db.put("jobs", job_id, job)
+    missing = [f for f in _pack(job)["spec_schema"]["required"] if not job["spec"].get(f)]
+    return {"job": job, "missing_required_fields": missing}
 
 
 @app.post("/api/jobs/{job_id}/documents")
