@@ -42,7 +42,8 @@ def main():
     ap.add_argument("--with-sample-spec", action="store_true")
     args = ap.parse_args()
 
-    job = Job(id=db.new_id("job"), vertical=vertical()["meta"]["vertical"])
+    job = Job(id=db.new_id("job"), vertical=vertical()["meta"]["vertical"],
+              area_code=vertical()["meta"].get("area_code", ""))
     if args.with_sample_spec:
         job.spec, job.spec_source, job.confirmed = SAMPLE_SPEC, "sample", True
     db.put("jobs", job.id, job.model_dump())
