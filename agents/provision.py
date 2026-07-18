@@ -82,7 +82,10 @@ TOOLS: dict[str, dict] = {
 }
 
 AGENT_TOOLS = {
-    "estimator": ["get_intake_form", "save_job_spec", "log_learned_questions"],
+    # log_learned_questions intentionally NOT here: new price factors are
+    # discovered on VENDOR calls (caller phase, wired later), never asked of
+    # the customer. The estimator only CONSUMES the pool via get_intake_form.
+    "estimator": ["get_intake_form", "save_job_spec"],
     "caller": ["get_job_spec", "get_benchmark", "log_quote", "log_call_outcome"],
     "closer": ["get_job_spec", "get_benchmark", "get_competing_quotes", "log_quote", "log_call_outcome"],
     "counterparty": ["counterparty_pricing"],
