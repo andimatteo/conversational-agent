@@ -1,0 +1,156 @@
+# ============================================================
+# Vertical pack: MOVING
+# Swapping The Negotiator to another market (auto body, freight,
+# wedding vendors...) means writing a sibling of this file.
+# No agent code changes. Prompts, benchmarks, red flags and
+# negotiation levers are all generated from here.
+# ============================================================
+meta:
+  vertical: moving
+  display_name: "Household moving"
+  counterparty_noun: "moving company"
+  job_noun: "move"
+  # Documented pain, cited in the report header:
+  evidence:
+    - "Real quotes for the same 45-mile Rock Hill -> Charlotte move ranged $1,158-$6,506 (5.6x spread)."
+    - "FMCSA: sight-unseen estimates are 40% more likely to end above the original quote."
+    - "BBB logs 13,000+ complaints against movers yearly, mostly unexpected price hikes."
+
+# ------------------------------------------------------------
+# The structured job spec. Both intake paths (voice interview,
+# document parse) must emit exactly this schema. The user
+# confirms it before any call is made.
+# ------------------------------------------------------------
+spec_schema:
+  required: [origin, destination, distance_miles, move_date, home_size, inventory, services]
+  fields:
+    origin:
+      type: object
+      fields: {city: str, state: str, floor: int, elevator: bool, stairs_flights: int, parking_distance_ft: int}
+    destination:
+      type: object
+      fields: {city: str, state: str, floor: int, elevator: bool, stairs_flights: int, parking_distance_ft: int}
+    distance_miles: {type: number}
+    move_date: {type: date}
+    date_flexible: {type: bool, default: false}
+    home_size: {type: enum, values: [studio, 1BR, 2BR, 3BR, 4BR+]}
+    inventory:
+      type: list
+      item_fields: {item: str, qty: int, special: {type: enum, values: [none, fragile, oversized, piano, appliance]}}
+    boxes_estimate: {type: int, default: 0}
+    services:
+      type: object
+      fields: {packing: bool, disassembly: bool, storage: bool}
+    notes: {type: str, default: ""}
+
+# Questions a professional estimator would ask. The intake agent
+# walks these in order and must not end the interview until every
+# required field is filled.
+estimator_questions:
+  - "Where are you moving from and to — city and state on both ends?"
+  - "Roughly how many miles is the move, if you know?"
+  - "What date do you want to move, and is there any flexibility?"
+  - "What size is the home — studio, one-bedroom, two-bedroom, larger?"
+  - "Any stairs on either end? Which floor, and is there an elevator?"
+  - "How far can a truck park from the door, roughly in feet? (This is the 'long carry' fee trap.)"
+  - "Walk me through the big items room by room — beds, sofas, appliances, anything fragile or oversized like a piano."
+  - "Roughly how many boxes, and do you want the movers to pack, or just load?"
+  - "Anything to disassemble — bed frames, desks? Any storage needed between dates?"
+
+# ------------------------------------------------------------
+# Price benchmark model. Used to (a) sanity-check quotes,
+# (b) compute counterparty ground-truth pricing in simulation,
+# (c) power the 30%-below-market red flag.
+# ------------------------------------------------------------
+benchmark:
+  crew_by_home_size:      # movers, estimated labor hours on site
+    studio: {movers: 2, hours: 3.5}
+    1BR:    {movers: 2, hours: 4.5}
+    2BR:    {movers: 3, hours: 6.0}
+    3BR:    {movers: 4, hours: 8.0}
+    4BR+:   {movers: 4, hours: 10.0}
+  per_mover_hourly_usd: 55
+  truck_fee_usd: 180
+  per_mile_usd: 4.0
+  modifiers:              # multiplicative on the base estimate
+    packing: 1.30
+    disassembly: 1.05
+    storage: 1.15
+    per_stairs_flight: 1.03
+    piano: 1.12
+    long_carry_over_75ft: 1.06
+  market_spread:          # fair market = base * these
+    low: 0.85
+    median: 1.25
+    high: 1.90
+
+# Canonical fee taxonomy — every logged line item maps to one of
+# these codes, which is what makes quotes comparable across calls.
+fee_taxonomy:
+  base:       "Base labor + truck"
+  fuel:       "Fuel / travel surcharge"
+  stairs:     "Stairs fee"
+  long_carry: "Long carry (truck-to-door distance)"
+  packing:    "Packing materials / labor"
+  disassembly: "Disassembly / reassembly"
+  insurance:  "Valuation / insurance add-on"
+  storage:    "Storage"
+  deposit:    "Deposit (paid up front)"
+  other:      "Other / unclassified"
+
+# ------------------------------------------------------------
+# Red-flag rules, evaluated server-side on every logged quote.
+# ------------------------------------------------------------
+red_flags:
+  - id: too_low
+    rule: "total < 0.70 * benchmark_median"
+    severity: high
+    label: "30%+ below market — classic lowball-then-upcharge signal (industry guidance treats this as a warning, not a win)"
+  - id: non_binding
+    rule: "binding == false"
+    severity: medium
+    label: "Non-binding estimate — FMCSA: sight-unseen estimates run over 40% more often"
+  - id: big_deposit
+    rule: "deposit > 0.25 * total"
+    severity: high
+    label: "Deposit above 25% — hostage-load risk factor"
+  - id: no_itemization
+    rule: "len(line_items) < 2"
+    severity: medium
+    label: "Refused to itemise — fees cannot be compared or challenged"
+  - id: pressure_expiry
+    rule: "'today' in conditions_text"
+    severity: low
+    label: "'Price only valid today' pressure tactic"
+
+# ------------------------------------------------------------
+# Negotiation levers, in the order the closer should try them.
+# ------------------------------------------------------------
+negotiation_levers:
+  - id: competing_bid
+    play: "Cite a REAL competing quote from the comparison DB by company name, total, and binding status; ask them to beat it."
+  - id: fee_challenge
+    play: "Challenge each non-base fee against the job spec: no stairs on record means no stairs fee; parking distance under 75ft means no long-carry fee."
+  - id: price_match
+    play: "Ask directly for a price match minus something, in exchange for booking today."
+  - id: bundle_removal
+    play: "Offer to drop add-ons (packing, insurance upsells) the spec doesn't ask for."
+  - id: date_flexibility
+    play: "If the spec says the date is flexible, offer a mid-week or off-peak date for a discount."
+  - id: deposit_reduction
+    play: "Ask to cut any deposit to a token amount, payment on delivery."
+
+# ------------------------------------------------------------
+# Conversation policy — the honesty and disclosure lines.
+# ------------------------------------------------------------
+conversation_policy:
+  disclose_upfront: true
+  disclosure_line: "I'm an AI assistant calling on behalf of a customer who's booking a move."
+  robot_question_response: >
+    Yes — you're talking to an AI assistant. I'm calling for a real customer with a
+    real move, and I have their full inventory in front of me. Happy to go through it.
+  hard_rules:
+    - "NEVER invent, inflate, or round up a competing quote. Only cite quotes returned by the get_competing_quotes tool, with exact figures."
+    - "NEVER misrepresent the job: the spec from get_job_spec is the single source of truth; describe it identically on every call."
+    - "NEVER accept or fabricate terms the customer didn't authorize (dates, extra services, deposits over policy)."
+    - "Every call MUST end through the log_call_outcome tool: an itemised quote, a callback commitment, or a documented decline. Never a vague 'around two thousand'."
