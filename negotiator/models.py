@@ -54,10 +54,24 @@ class Company(BaseModel):
 class Job(BaseModel):
     id: str
     vertical: str
+    area_code: str = ""             # picks the (vertical, area) pack + learned-question pool
     spec: dict = {}
     spec_source: str = ""           # "interview" | "document" | "interview+document"
     confirmed: bool = False
+    discovered_questions: list[dict] = []  # surfaced to the user: what this job's intake taught us
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class LearnedQuestion(BaseModel):
+    """A price-relevant intake question discovered mid-call. Stored per
+    (vertical, area_code); merged into every future intake form for that area."""
+    question: str
+    why_it_matters: str = ""
+
+
+class LearnedIn(BaseModel):
+    job_id: str
+    questions: list[LearnedQuestion]
 
 
 class CallRecord(BaseModel):

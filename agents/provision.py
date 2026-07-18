@@ -10,7 +10,7 @@ import sys
 
 import httpx
 
-from negotiator.config import ELEVENLABS_API_KEY, PUBLIC_BASE_URL, personas, registry_path
+from negotiator.config import ELEVENLABS_API_KEY, PUBLIC_BASE_URL, personas, registry_path, vertical
 from . import prompts
 
 API = "https://api.elevenlabs.io/v1/convai"
@@ -31,7 +31,8 @@ _IDS = {"job_id": {"type": "string", "description": "Copy job_id EXACTLY from yo
 
 LINE_ITEM = {"type": "object", "properties": {
     "label": {"type": "string", "description": "The fee as the rep named it"},
-    "code": {"type": "string", "description": "Canonical fee code from your taxonomy (base/fuel/stairs/long_carry/packing/disassembly/insurance/storage/deposit/other)"},
+    "code": {"type": "string", "description": "Canonical fee code from your taxonomy ("
+             + "/".join(vertical()["fee_taxonomy"]) + ")"},
     "amount": {"type": "number"},
     "kind": {"type": "string", "enum": ["base", "fee", "addon", "discount"]},
     "contingent": {"type": "boolean", "description": "True if only charged under a condition"},
@@ -43,6 +44,18 @@ TOOLS: dict[str, dict] = {
     "save_job_spec": ("Save the structured job spec built during the intake interview.",
                       {"job_id": _IDS["job_id"], "spec": {"type": "object", "description": "Job spec JSON exactly matching the schema in your instructions"}},
                       ["job_id", "spec"]),
+    "get_intake_form": ("Fetch the FULL intake question list for this job's domain and service area: "
+                        "the base form questions PLUS questions learned from previous calls. Call this FIRST.",
+                        {"job_id": _IDS["job_id"]}, ["job_id"]),
+    "log_learned_questions": ("Log NEW price-relevant intake questions this call surfaced that the "
+                              "question list does not already cover. They join the intake form for "
+                              "future jobs in this service area.",
+                              {"job_id": _IDS["job_id"],
+                               "questions": {"type": "array", "items": {"type": "object", "properties": {
+                                   "question": {"type": "string", "description": "The question, phrased generically for any future customer"},
+                                   "why_it_matters": {"type": "string", "description": "How this factor changes the price"}},
+                                   "required": ["question"]}}},
+                              ["job_id", "questions"]),
     "get_benchmark": ("Get the fair-market price range and red-flag floor for this job.",
                       {"job_id": _IDS["job_id"]}, ["job_id"]),
     "get_competing_quotes": ("The ONLY permitted source of competing bids. Cite exactly what it returns, nothing else.",
@@ -69,15 +82,18 @@ TOOLS: dict[str, dict] = {
 }
 
 AGENT_TOOLS = {
-    "estimator": ["save_job_spec"],
+    "estimator": ["get_intake_form", "save_job_spec", "log_learned_questions"],
     "caller": ["get_job_spec", "get_benchmark", "log_quote", "log_call_outcome"],
     "closer": ["get_job_spec", "get_benchmark", "get_competing_quotes", "log_quote", "log_call_outcome"],
     "counterparty": ["counterparty_pricing"],
 }
 
 FIRST_MESSAGES = {
-    "estimator": "Hi! I'm the intake assistant from The Negotiator — I'll build the exact "
-                 "job spec we'll use to get you real, comparable quotes. First: where are you moving from, and to?",
+    # From the domain sheet — swapping VERTICAL swaps the opener too.
+    "estimator": vertical().get("estimator_first_message",
+                                "Hi! I'm the intake assistant from The Negotiator — I'll build the "
+                                "exact job spec we'll use to get you real, comparable quotes. "
+                                "What do you need done?").strip(),
     "caller": "",   # empty = wait: the counterparty answers the phone first
     "closer": "",
     "stonewaller": "Summit Moving.",

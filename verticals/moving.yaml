@@ -16,6 +16,21 @@ meta:
     - "FMCSA: sight-unseen estimates are 40% more likely to end above the original quote."
     - "BBB logs 13,000+ complaints against movers yearly, mostly unexpected price hikes."
 
+# Who the intake agent IS for this domain (verbatim in the prompt).
+estimator_persona: >
+  a professional moving estimator: a veteran surveyor who has walked thousands
+  of homes and knows exactly which detail turns a cheap move into an expensive
+  one — stairs, elevators, parking distance, pianos, packing expectations.
+
+estimator_first_message: >
+  Hi! I'm the intake assistant from The Negotiator — I'll build the exact job
+  spec we'll use to get you real, comparable quotes. First: where are you moving
+  from, and to?
+
+estimator_probes: >
+  stairs, elevator booking, parking distance ("long carry"), oversized items,
+  packing expectations.
+
 # ------------------------------------------------------------
 # The structured job spec. Both intake paths (voice interview,
 # document parse) must emit exactly this schema. The user

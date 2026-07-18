@@ -1,16 +1,51 @@
-"""Benchmark pricing + red-flag engine, driven entirely by the vertical pack.
+"""Benchmark pricing + red-flag engine, driven entirely by the domain pack.
+
+Two benchmark models:
+  rate_card  — generic (benchmark.job_types): callout + hours*rate + parts,
+               then declarative spec-matched multipliers. This is the model
+               AI-generated sheets emit; plumbing uses it.
+  crew model — the original moving-specific model (benchmark.crew_by_home_size).
 
 Three consumers:
   1. red-flag evaluation on every logged quote,
   2. the negotiator's get_benchmark tool ("is this quote sane?"),
   3. the simulated counterparties' hidden ground-truth pricing.
+
+Every function takes the pack explicitly (falls back to the process-default
+vertical() for older call sites).
 """
 from .config import vertical
 from .models import QuoteIn
 
 
-def base_estimate(spec: dict) -> float:
-    b = vertical()["benchmark"]
+def _spec_value(spec: dict, dotted: str):
+    """Resolve 'access.slab_foundation' against the spec dict."""
+    node = spec
+    for part in dotted.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+    return node
+
+
+def _rate_card_estimate(spec: dict, b: dict) -> float:
+    jt = b["job_types"].get(spec.get("job_type") or "other") \
+        or b["job_types"].get("other") or next(iter(b["job_types"].values()))
+    est = b.get("callout_fee_usd", 0) + jt["hours"] * b["hourly_rate_usd"] + jt.get("parts_usd", 0)
+    for m in b.get("modifiers", []):
+        v = _spec_value(spec, m["field"])
+        if "equals" in m:
+            match = v == m["equals"]
+        elif "gte" in m:
+            match = (v or 0) >= m["gte"]
+        else:
+            match = bool(v)
+        if match:
+            est *= m["multiplier"]
+    return round(est, 2)
+
+
+def _moving_crew_estimate(spec: dict, b: dict) -> float:
     crew = b["crew_by_home_size"].get(spec.get("home_size", "2BR"), b["crew_by_home_size"]["2BR"])
     est = crew["movers"] * crew["hours"] * b["per_mover_hourly_usd"]
     est += b["truck_fee_usd"] + b["per_mile_usd"] * float(spec.get("distance_miles", 0))
@@ -34,9 +69,15 @@ def base_estimate(spec: dict) -> float:
     return round(est, 2)
 
 
-def market_range(spec: dict) -> dict:
-    base = base_estimate(spec)
-    spread = vertical()["benchmark"]["market_spread"]
+def base_estimate(spec: dict, pack: dict | None = None) -> float:
+    b = (pack or vertical())["benchmark"]
+    return _rate_card_estimate(spec, b) if "job_types" in b else _moving_crew_estimate(spec, b)
+
+
+def market_range(spec: dict, pack: dict | None = None) -> dict:
+    pack = pack or vertical()
+    base = base_estimate(spec, pack)
+    spread = pack["benchmark"]["market_spread"]
     return {
         "base_estimate": base,
         "fair_low": round(base * spread["low"]),
@@ -46,17 +87,19 @@ def market_range(spec: dict) -> dict:
     }
 
 
-def evaluate_red_flags(quote: QuoteIn, spec: dict) -> list[dict]:
-    """Rules come from the vertical pack; conditions are evaluated here explicitly
+def evaluate_red_flags(quote: QuoteIn, spec: dict, pack: dict | None = None) -> list[dict]:
+    """Rules come from the pack; conditions are evaluated here explicitly
     (no eval() of YAML strings — the YAML `rule` field is documentation)."""
-    median = market_range(spec)["median"]
-    flags_cfg = {f["id"]: f for f in vertical()["red_flags"]}
+    pack = pack or vertical()
+    median = market_range(spec, pack)["median"]
+    flags_cfg = {f["id"]: f for f in pack["red_flags"]}
     conditions_text = " ".join(quote.conditions).lower()
 
     hits = []
     def hit(fid):
-        f = flags_cfg[fid]
-        hits.append({"id": fid, "severity": f["severity"], "label": f["label"]})
+        f = flags_cfg.get(fid)
+        if f:
+            hits.append({"id": fid, "severity": f["severity"], "label": f["label"]})
 
     if quote.total < 0.70 * median:
         hit("too_low")
@@ -71,10 +114,10 @@ def evaluate_red_flags(quote: QuoteIn, spec: dict) -> list[dict]:
     return hits
 
 
-def counterparty_pricing(persona: dict, spec: dict) -> dict:
+def counterparty_pricing(persona: dict, spec: dict, pack: dict | None = None) -> dict:
     """Hidden ground truth for a simulated company: its back-office estimate.
     Served ONLY to that counterparty agent via its own webhook tool."""
-    med = market_range(spec)["median"]
+    med = market_range(spec, pack)["median"]
     pol = persona["policy"]
     return {
         "list_price": round(med * pol["anchor_multiplier"]),

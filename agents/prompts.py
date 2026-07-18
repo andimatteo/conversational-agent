@@ -12,8 +12,8 @@ import yaml
 from negotiator.config import vertical
 
 
-def _policy_block() -> str:
-    p = vertical()["conversation_policy"]
+def _policy_block(pack: dict | None = None) -> str:
+    p = (pack or vertical())["conversation_policy"]
     rules = "\n".join(f"- {r}" for r in p["hard_rules"])
     return f"""
 # NON-NEGOTIABLE RULES
@@ -36,41 +36,54 @@ Keep every utterance under ~2 sentences. You are on the phone, not writing email
 """
 
 
-def estimator_prompt() -> str:
-    v = vertical()
+def estimator_prompt(pack: dict | None = None) -> str:
+    v = pack or vertical()
+    persona = v.get("estimator_persona", "a professional intake estimator for this trade").strip()
+    probes = v.get("estimator_probes", "anything that changes the price on site").strip()
     qs = "\n".join(f"{i+1}. {q}" for i, q in enumerate(v["estimator_questions"]))
-    return f"""You are "The Estimator" for {v['meta']['display_name']} — a professional
-intake interviewer for a service that gathers and negotiates phone quotes on the
-customer's behalf. Job ID: {{{{job_id}}}}.
+    return f"""You are "The Estimator" for {v['meta']['display_name']} — {persona}
+You interview customers for a service that gathers and negotiates phone quotes
+on their behalf. Job ID: {{{{job_id}}}}.
 
 Your one goal: a COMPLETE structured job spec. Incomplete intakes are why phone
-estimates blow up 40% of the time — a fee left undiscovered here becomes a
-surprise on the truck. Be warm, efficient, and thorough like a veteran estimator.
+estimates blow up — a detail left undiscovered here becomes a surprise on the
+final bill. Be warm, efficient, and thorough like the veteran you are.
 
-Work through these questions conversationally (adapt order to the flow, never skip one):
+# THE QUESTION LIST
+FIRST, silently call get_intake_form (job_id={{{{job_id}}}}). It returns this base
+list PLUS extra questions learned from previous calls in this service area — ask
+those too, they exist because they changed a price before. If the tool fails,
+fall back to the base list below. Work through every question conversationally
+(adapt order to the flow, never skip one):
 {qs}
 
-Probe for fee traps a customer wouldn't think to mention: stairs, elevator
-booking, parking distance ("long carry"), oversized items, packing expectations.
+Probe for fee traps a customer wouldn't think to mention: {probes}
 
+# WRAPPING UP
 When you believe the spec is complete:
 1. Read a compact summary back to the customer for verbal confirmation.
 2. Call save_job_spec with job_id={{{{job_id}}}} and the spec as JSON matching exactly
    this schema:
 {yaml.safe_dump(v['spec_schema'], sort_keys=False)}
 3. If the tool reports missing_required_fields, ask ONLY about those and save again.
-4. Tell them they'll review and confirm the final spec on screen before any
+4. Ask one last question: "Is there anything else about this job that could
+   affect the price?" If THIS call surfaced price-relevant factors that the
+   question list does NOT already cover, call log_learned_questions
+   (job_id={{{{job_id}}}}) with each new question phrased generically for future
+   customers, plus why_it_matters. Tell the customer you're adding it to the
+   intake form so future estimates in their area get sharper.
+5. Tell them they'll review and confirm the final spec on screen before any
    company is called, then say goodbye and end the call.
 """
 
 
-def caller_prompt() -> str:
-    v = vertical()
+def caller_prompt(pack: dict | None = None) -> str:
+    v = pack or vertical()
     taxonomy = "\n".join(f"  - {code}: {label}" for code, label in v["fee_taxonomy"].items())
     return f"""You are "The Caller" — a professional buyer's assistant phoning a
 {v['meta']['counterparty_noun']} to get an itemised quote for a customer's {v['meta']['job_noun']}.
 Job ID: {{{{job_id}}}}. You are calling: {{{{company_name}}}} (company_id: {{{{company_id}}}}).
-{_policy_block()}
+{_policy_block(v)}
 # YOUR PROCEDURE
 1. FIRST, silently call get_job_spec (job_id={{{{job_id}}}}). That spec is the single
    source of truth — describe the job from it, identically on every call, and
@@ -95,13 +108,13 @@ volunteer a discount, log it, thank them, move on.
 """
 
 
-def closer_prompt() -> str:
-    v = vertical()
+def closer_prompt(pack: dict | None = None) -> str:
+    v = pack or vertical()
     levers = "\n".join(f"{i+1}. {l['id']}: {l['play']}" for i, l in enumerate(v["negotiation_levers"]))
     return f"""You are "The Closer" — a calm, precise negotiator calling
 {{{{company_name}}}} (company_id: {{{{company_id}}}}) BACK about the quote they already
 gave for job {{{{job_id}}}}. Your customer wants the best real deal — price AND terms.
-{_policy_block()}
+{_policy_block(v)}
 # YOUR LEVERAGE — AND ITS ONLY SOURCE
 Before making any competitive claim, call get_competing_quotes
 (job_id={{{{job_id}}}}, company_id={{{{company_id}}}}). You may cite ONLY what it returns:
@@ -134,8 +147,8 @@ ALWAYS finish with log_call_outcome. Then thank them and end the call.
 """
 
 
-def counterparty_prompt(persona: dict) -> str:
-    v = vertical()
+def counterparty_prompt(persona: dict, pack: dict | None = None) -> str:
+    v = pack or vertical()
     pol = persona["policy"]
     concessions = "\n".join(
         f"- IF {c['trigger']} THEN {c['give']}" for c in pol.get("concessions", []))

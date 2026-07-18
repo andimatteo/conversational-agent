@@ -1,0 +1,185 @@
+# ============================================================
+# Vertical pack: PLUMBING — the MVP domain sheet.
+# The whole product retargets to a domain+area by swapping this
+# file. Sibling sheets for other areas of the same domain carry
+# a different meta.area_code and can be AI-written (packgen.py).
+# ============================================================
+meta:
+  vertical: plumbing
+  area_code: "28202"          # service area this sheet is tuned for (Charlotte, NC downtown)
+  display_name: "Residential plumbing"
+  counterparty_noun: "plumbing company"
+  job_noun: "plumbing job"
+  evidence:
+    - "Typical US plumber visits run $180-$530, but identical water-heater jobs get quoted $900-$3,500 depending on who answers the phone."
+    - "Trip/callout fees, 'diagnostic' fees and parts markups of 100-300% are routinely added only after the plumber is on site."
+    - "Emergency and after-hours multipliers (1.5-3x) are rarely disclosed unless the caller asks explicitly."
+
+# Who the intake agent IS for this domain. Injected into the
+# estimator system prompt verbatim.
+estimator_persona: >
+  a professional plumbing estimator: a licensed master plumber with 20 years in
+  the field who has priced thousands of residential jobs and knows exactly which
+  detail turns a $200 visit into a $2,000 one — access, pipe material, water
+  heater age, slab foundations, permit requirements.
+
+estimator_first_message: >
+  Hi! I'm the intake assistant from The Negotiator — I'll build the exact job
+  spec we'll use to get you real, comparable plumbing quotes. First: what's
+  going on with your plumbing?
+
+# The one-line probe hint rendered into the estimator prompt: fee
+# traps a customer wouldn't think to mention.
+estimator_probes: >
+  shut-off valve location, pipe material and age, slab vs crawlspace access,
+  after-hours timing, permit-triggering work (water heater, gas, sewer), and
+  whether a previous "cheap fix" already failed.
+
+# ------------------------------------------------------------
+# The structured job spec. Voice interview and document parse
+# must both emit exactly this schema; user confirms before calls.
+# ------------------------------------------------------------
+spec_schema:
+  required: [area_code, job_type, problem_description, property_type, urgency, access]
+  fields:
+    area_code: {type: str, description: "Service area / ZIP where the work happens"}
+    job_type:
+      type: enum
+      values: [leak_repair, drain_clog, water_heater, toilet_repair, faucet_fixture,
+               repipe, sewer_line, gas_line, other]
+    problem_description: {type: str}
+    property_type: {type: enum, values: [apartment, house, townhouse, condo, commercial]}
+    property_age_years: {type: int, default: 0}
+    urgency: {type: enum, values: [emergency, within_24h, this_week, flexible]}
+    water_shutoff_known: {type: bool, default: false}
+    access:
+      type: object
+      fields: {floor: int, crawlspace: bool, slab_foundation: bool, tight_access: bool}
+    fixtures_affected:
+      type: list
+      item_fields: {fixture: str, issue: str}
+    pipe_material: {type: enum, values: [copper, pex, pvc, galvanized, cast_iron, unknown], default: unknown}
+    prior_repair_attempted: {type: bool, default: false}
+    photos_available: {type: bool, default: false}
+    notes: {type: str, default: ""}
+
+# Base form questions — the pre-made part of the intake form.
+# The live form = these + area-learned questions from the DB
+# (see /api/intake-form and the learned_questions table).
+estimator_questions:
+  - "What's the problem — walk me through what you're seeing, hearing or smelling?"
+  - "What area code or ZIP is the property in?"
+  - "What kind of property is it — apartment, house, townhouse — and roughly how old?"
+  - "How urgent is this: active emergency, today, this week, or flexible?"
+  - "Do you know where the main water shut-off is, and is the water off right now?"
+  - "Which fixtures are affected — sinks, toilets, shower, water heater — and what's each one doing?"
+  - "Where does the problem live: which floor, and is the home on a slab or over a crawlspace?"
+  - "Do you know the pipe material — copper, PEX, PVC, old galvanized steel?"
+  - "Has anyone already tried to fix this — you, a handyman, another plumber?"
+  - "Can you share photos of the problem area? They tighten the estimate a lot."
+
+# ------------------------------------------------------------
+# Price benchmark — generic rate-card model (works for any
+# service-visit domain, and is what AI-generated sheets emit):
+#   base = callout_fee + hours * hourly_rate + parts
+#   then multiplicative modifiers matched against the spec.
+# ------------------------------------------------------------
+benchmark:
+  model: rate_card
+  callout_fee_usd: 90
+  hourly_rate_usd: 125
+  job_types:                 # typical on-site hours + parts for the area
+    leak_repair:    {hours: 2.0,  parts_usd: 60}
+    drain_clog:     {hours: 1.5,  parts_usd: 25}
+    water_heater:   {hours: 4.0,  parts_usd: 950}
+    toilet_repair:  {hours: 1.5,  parts_usd: 120}
+    faucet_fixture: {hours: 1.5,  parts_usd: 180}
+    repipe:         {hours: 24.0, parts_usd: 2200}
+    sewer_line:     {hours: 16.0, parts_usd: 1800}
+    gas_line:       {hours: 6.0,  parts_usd: 400}
+    other:          {hours: 3.0,  parts_usd: 150}
+  modifiers:                 # multiplicative when the spec matches
+    - {field: urgency, equals: emergency, multiplier: 1.5}
+    - {field: urgency, equals: within_24h, multiplier: 1.15}
+    - {field: access.slab_foundation, multiplier: 1.25}
+    - {field: access.tight_access, multiplier: 1.10}
+    - {field: property_age_years, gte: 50, multiplier: 1.15}
+    - {field: pipe_material, equals: galvanized, multiplier: 1.20}
+    - {field: prior_repair_attempted, multiplier: 1.10}
+  market_spread:
+    low: 0.80
+    median: 1.20
+    high: 1.90
+
+# Canonical fee taxonomy — what makes quotes comparable.
+fee_taxonomy:
+  base:        "Labor"
+  callout:     "Trip / callout fee"
+  diagnostic:  "Diagnostic / camera inspection fee"
+  parts:       "Parts and materials"
+  emergency:   "Emergency / after-hours surcharge"
+  disposal:    "Haul-away / disposal fee"
+  permit:      "Permit and inspection"
+  warranty:    "Warranty / service-plan add-on"
+  deposit:     "Deposit (paid up front)"
+  other:       "Other / unclassified"
+
+# ------------------------------------------------------------
+# Red-flag rules, evaluated server-side on every logged quote.
+# ------------------------------------------------------------
+red_flags:
+  - id: too_low
+    rule: "total < 0.70 * benchmark_median"
+    severity: high
+    label: "30%+ below market — classic get-in-the-door price; the real bill materialises on site"
+  - id: non_binding
+    rule: "binding == false"
+    severity: medium
+    label: "Non-binding estimate — 'we'll know when we open the wall' is where budgets die"
+  - id: big_deposit
+    rule: "deposit > 0.25 * total"
+    severity: high
+    label: "Deposit above 25% before any work — walk-away risk"
+  - id: no_itemization
+    rule: "len(line_items) < 2"
+    severity: medium
+    label: "Refused to itemise labor, parts and fees — markups cannot be challenged"
+  - id: pressure_expiry
+    rule: "'today' in conditions_text"
+    severity: low
+    label: "'Price only valid today' pressure tactic"
+
+# ------------------------------------------------------------
+# Negotiation levers, in the order the closer should try them.
+# ------------------------------------------------------------
+negotiation_levers:
+  - id: competing_bid
+    play: "Cite a REAL competing quote from the comparison DB by company name, total, and binding status; ask them to beat it."
+  - id: fee_challenge
+    play: "Challenge the callout/diagnostic fee being charged ON TOP of the repair when they win the job — most shops waive it with the work."
+  - id: parts_markup
+    play: "Ask for the parts line separately and compare to retail; ask them to meet in the middle on obvious 2x+ markups."
+  - id: price_match
+    play: "Ask directly for a price match minus something, in exchange for booking today."
+  - id: bundle_removal
+    play: "Drop add-ons the spec doesn't ask for: service plans, 'while we're there' extras, premium fixtures."
+  - id: schedule_flexibility
+    play: "If urgency is flexible, offer a normal-hours weekday slot to remove any emergency/after-hours surcharge."
+  - id: deposit_reduction
+    play: "Ask to cut any deposit to a token amount, balance on completion."
+
+# ------------------------------------------------------------
+# Conversation policy — the honesty and disclosure lines.
+# ------------------------------------------------------------
+conversation_policy:
+  disclose_upfront: true
+  disclosure_line: "I'm an AI assistant calling on behalf of a homeowner who needs a plumbing job done."
+  robot_question_response: >
+    Yes — you're talking to an AI assistant. I'm calling for a real customer with
+    a real plumbing problem, and I have the full job details in front of me.
+    Happy to go through them.
+  hard_rules:
+    - "NEVER invent, inflate, or round up a competing quote. Only cite quotes returned by the get_competing_quotes tool, with exact figures."
+    - "NEVER misrepresent the job: the spec from get_job_spec is the single source of truth; describe it identically on every call."
+    - "NEVER accept or fabricate terms the customer didn't authorize (schedules, extra work, deposits over policy)."
+    - "Every call MUST end through the log_call_outcome tool: an itemised quote, a callback commitment, or a documented decline. Never a vague 'a few hundred bucks'."

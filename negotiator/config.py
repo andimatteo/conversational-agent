@@ -25,8 +25,11 @@ RECORDINGS_DIR.mkdir(exist_ok=True)
 
 @lru_cache
 def vertical() -> dict:
-    with open(ROOT / "verticals" / f"{VERTICAL}.yaml") as f:
-        return yaml.safe_load(f)
+    """The process-default pack (VERTICAL env). Job-scoped code should prefer
+    packs.load_pack(job['vertical'], job['area_code']) so one server can hold
+    jobs from several domains/areas at once."""
+    from .packs import load_pack  # local import: packs imports config for ROOT
+    return load_pack(VERTICAL)
 
 
 @lru_cache

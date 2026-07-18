@@ -5,6 +5,7 @@ itemisation completeness. Every claim cites a conversation_id + verbatim line.""
 from . import db
 from .benchmarks import market_range
 from .config import vertical
+from .packs import load_pack
 
 
 def _score(best_quote: dict, bench: dict) -> float:
@@ -17,7 +18,8 @@ def _score(best_quote: dict, bench: dict) -> float:
 
 def build_report(job_id: str) -> dict:
     job = db.get("jobs", job_id)
-    bench = market_range(job["spec"])
+    pack = load_pack(job.get("vertical") or vertical()["meta"]["vertical"], job.get("area_code", ""))
+    bench = market_range(job["spec"], pack)
     companies = db.where("companies", job_id=job_id)
     calls = db.where("calls", job_id=job_id)
 
@@ -59,7 +61,7 @@ def build_report(job_id: str) -> dict:
     return {
         "job": job,
         "benchmark": bench,
-        "market_evidence": vertical()["meta"]["evidence"],
+        "market_evidence": pack["meta"].get("evidence", []),
         "ranking": rows,
         "recommendation": _recommendation(winner, rows, bench) if winner else
             "No usable quotes were gathered. See per-call outcomes.",
