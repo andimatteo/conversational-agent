@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from negotiator import db
 from negotiator.benchmarks import market_range
+from negotiator.packs import load_pack
 from negotiator.seed import SAMPLE_SPEC
 from negotiator.models import Company, Job
 from negotiator.server import app
@@ -35,7 +36,9 @@ def main():
         db.put("companies", co.id, co.model_dump(), job_id=job.id)
         cos[pid] = co.id
 
-    bench = market_range(SAMPLE_SPEC)
+    # explicit pack: this test is about MOVING regardless of the process
+    # default (VERTICAL env) — the server resolves the pack from the job
+    bench = market_range(SAMPLE_SPEC, load_pack("moving"))
     print(f"benchmark: {bench}")
 
     # --- guard: no calls before user confirmation --------------------------
