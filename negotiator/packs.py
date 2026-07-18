@@ -122,6 +122,43 @@ def load_pack(vertical_name: str, area_code: str = "") -> dict:
     return pack
 
 
+_TYPE_MAP = {"str": "string", "int": "integer", "number": "number",
+             "float": "number", "bool": "boolean", "date": "string"}
+
+
+def _field_schema(defn) -> dict:
+    """One spec_schema field definition -> JSON schema (defn is either a bare
+    type name like `str` or a mapping like {type: enum, values: [...]})"""
+    if isinstance(defn, str):
+        return {"type": _TYPE_MAP.get(defn, "string")}
+    t = defn.get("type", "str")
+    if t == "enum":
+        return {"type": "string", "enum": [str(v) for v in defn.get("values", [])]}
+    if t == "object":
+        return {"type": "object",
+                "properties": {k: _field_schema(v) for k, v in (defn.get("fields") or {}).items()}}
+    if t == "list":
+        return {"type": "array",
+                "items": {"type": "object",
+                          "properties": {k: _field_schema(v) for k, v in (defn.get("item_fields") or {}).items()}}}
+    out = {"type": _TYPE_MAP.get(t, "string")}
+    if t == "date":
+        out["description"] = "ISO date, YYYY-MM-DD"
+    if "description" in defn:
+        out["description"] = defn["description"]
+    return out
+
+
+def spec_json_schema(pack: dict) -> dict:
+    """The pack's spec_schema as real JSON schema. Webhook tools MUST declare
+    every property explicitly: ElevenLabs builds tool-call bodies from the
+    declared schema only, so a bare {type: object} arrives as {}."""
+    ss = pack["spec_schema"]
+    return {"type": "object",
+            "properties": {k: _field_schema(v) for k, v in ss["fields"].items()},
+            "required": list(ss["required"])}
+
+
 def save_pack(pack: dict, force: bool = False) -> Path:
     """Persist a (validated) sheet as verticals/<vertical>[-<area>].yaml."""
     errs = validate_pack(pack)

@@ -11,6 +11,7 @@ import sys
 import httpx
 
 from negotiator.config import ELEVENLABS_API_KEY, PUBLIC_BASE_URL, personas, registry_path, vertical
+from negotiator.packs import spec_json_schema
 from . import prompts
 
 API = "https://api.elevenlabs.io/v1/convai"
@@ -41,8 +42,13 @@ LINE_ITEM = {"type": "object", "properties": {
 TOOLS: dict[str, dict] = {
     "get_job_spec": ("Fetch the confirmed job spec — the single source of truth you describe on every call.",
                      {"job_id": _IDS["job_id"]}, ["job_id"]),
+    # NOTE: the spec properties are declared field by field from the domain
+    # sheet — ElevenLabs only sends declared properties (a bare object arrives
+    # as {}), so this is what makes the interview actually persist.
     "save_job_spec": ("Save the structured job spec built during the intake interview.",
-                      {"job_id": _IDS["job_id"], "spec": {"type": "object", "description": "Job spec JSON exactly matching the schema in your instructions"}},
+                      {"job_id": _IDS["job_id"],
+                       "spec": {**spec_json_schema(vertical()),
+                                "description": "The complete job spec, every field you gathered"}},
                       ["job_id", "spec"]),
     "get_intake_form": ("Fetch the FULL intake question list for this job's domain and service area: "
                         "the base form questions PLUS questions learned from previous calls. Call this FIRST.",
@@ -105,12 +111,28 @@ FIRST_MESSAGES = {
 }
 
 
+def _describe(node: dict, hint: str) -> dict:
+    """ElevenLabs rejects any schema node without a description (422:
+    'Must set one of: description, dynamic_variable, ...') — recursively
+    guarantee one on every property, array item and nested object."""
+    out = dict(node)
+    if "description" not in out:
+        out["description"] = hint
+    if "properties" in out:
+        out["properties"] = {k: _describe(v, k.replace("_", " ")) for k, v in out["properties"].items()}
+    if "items" in out and isinstance(out["items"], dict):
+        out["items"] = _describe(out["items"], f"one {hint} entry")
+    return out
+
+
 def _tool_body(name: str) -> dict:
     desc, props, required = TOOLS[name]
+    props = {k: _describe(v, k.replace("_", " ")) for k, v in props.items()}
     return {"tool_config": {
         "type": "webhook", "name": name, "description": desc, "response_timeout_secs": 20,
         "api_schema": {"url": f"{PUBLIC_BASE_URL}/agent-tools/{name}", "method": "POST",
-                       "request_body_schema": {"type": "object", "properties": props, "required": required}}}}
+                       "request_body_schema": {"type": "object", "description": desc,
+                                               "properties": props, "required": required}}}}
 
 
 def _agent_body(name: str, prompt: str, voice_key: str, first_message: str, tool_ids: list[str]) -> dict:
@@ -122,7 +144,12 @@ def _agent_body(name: str, prompt: str, voice_key: str, first_message: str, tool
                 "language": "en",
                 "dynamic_variables": {"dynamic_variable_placeholders":
                                       {"job_id": "unset", "company_id": "unset", "company_name": "unset"}},
-                "prompt": {"prompt": prompt, "llm": "gpt-4o", "temperature": 0.4, "tool_ids": tool_ids},
+                "prompt": {"prompt": prompt, "llm": "gpt-4o", "temperature": 0.4, "tool_ids": tool_ids,
+                           # without the end_call system tool an agent can say
+                           # goodbye but is physically unable to hang up
+                           "built_in_tools": {"end_call": {
+                               "type": "system", "name": "end_call",
+                               "params": {"system_tool_type": "end_call"}}}},
             },
             # pcm_16000 both directions so the agent-to-agent bridge can pipe audio raw
             "tts": {"voice_id": VOICES[voice_key], "model_id": "eleven_turbo_v2",
@@ -143,9 +170,13 @@ def _upsert(client: httpx.Client, kind: str, key: str, body: dict, registry: dic
         print(f"  patch failed for {key} ({r.status_code}), recreating...")
     create_path = f"{API}/tools" if kind == "tools" else f"{API}/agents/create"
     r = client.post(create_path, json=body, headers=HEADERS)
-    r.raise_for_status()
+    if r.status_code >= 300:
+        print(f"  FAILED {kind[:-1]} {key}: {r.status_code} {r.text[:500]}")
+        r.raise_for_status()
     new_id = r.json().get("id") or r.json().get("agent_id")
     registry[kind][key] = new_id
+    # persist after every create: a mid-run failure must not orphan live ids
+    registry_path().write_text(json.dumps(registry, indent=2))
     print(f"  created {kind[:-1]} {key} ({new_id})")
     return new_id
 
