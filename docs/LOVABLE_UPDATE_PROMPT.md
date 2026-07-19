@@ -58,7 +58,7 @@ Update QuoteWise. Keep everything not mentioned here exactly as it is.
 
 **5. Sanity checks (fix only if missing)**
 - `API_BASE` lives in ONE config file; current value
-  `https://point-tears-childrens-residential.trycloudflare.com`.
+  `https://partner-may-cheers-switched.trycloudflare.com`.
 - Every `/api/*` request carries `Authorization: Bearer <token>`; on 401 clear
   the token and redirect to `/login`. Login page shows the demo hint
   `demo@negotiator.app / demo1234`.

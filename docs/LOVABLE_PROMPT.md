@@ -39,7 +39,7 @@ every form, spec view and label must render from the schemas the API returns.
 ## Ground rules
 
 - All data comes from a REST API. Define `const API_BASE` in ONE config file,
-  default `https://point-tears-childrens-residential.trycloudflare.com`.
+  default `https://partner-may-cheers-switched.trycloudflare.com`.
 - Auth is a bearer token: store it in localStorage and attach
   `Authorization: Bearer <token>` to EVERY `/api/*` request. Public without token:
   `/api/auth/*`, `/api/verticals`, `/api/intake-form`.

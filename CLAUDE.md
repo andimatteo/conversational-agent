@@ -91,6 +91,37 @@ DONE and verified offline:
   `GET /api/jobs/{id}/call-list`. Offline service + authenticated endpoint test:
   `python -m tests.market_discovery_test`.
 
+- **THE CALLER MODULE IS LIVE-PROVEN** (2026-07-18 evening): server-side call
+  orchestration in `negotiator/callrunner.py` (`POST /api/jobs/{id}/calls/start`,
+  `GET /api/jobs/{id}/call-queue` — statuses to_call/queued/calling/quote/callback/
+  decline/hangup derived from real DB records). First successful live agent-to-agent
+  bridge call: Caller vs plumbing lowballer — AI disclosure, in-character robot
+  reaction, hidden-fee extraction (anchor $1,400 → real all-in $2,572 itemised in 5
+  codes, non_binding flag, verbatim evidence, outcome=quote, transcript+recording
+  fetched). Bridge deadlock FIXED in `simulation/bridge.py`: speech is held until the
+  peer connects (the greeting was being dropped) and the pump sends continuous
+  zero-frames as silence so ASR can close turns. `conversation_id` read from
+  `_conversation_id`. Report/queue use the LATEST initial quote (callers refine
+  mid-call).
+- **Counterparty personas are per-domain**: `agents/personas/{plumbing,moving}.yaml`
+  (3 styles each, stable ids), `config.personas(vertical)`; prompts + first_message
+  use `{{company_name}}` so any company name can wear a persona. Provision reads
+  persona `first_message` from yaml.
+- **Synthetic market from real places** (Andrea's decision: NEVER call real
+  businesses): `POST /api/jobs/{id}/companies/from-call-list` promotes discovered
+  Google/OSM leads to companies with `source="synthetic"` + personas round-robin —
+  real name on the board, simulated behavior. Discovery router now saves partial
+  scans too (Google+OSM without Yelp is a valid list).
+- **Real outbound call for the live demo** (Andrea on the phone as the vendor):
+  `POST /api/jobs/{id}/calls/real {to_number, phase}` via ElevenLabs native Twilio
+  outbound. NEEDS `ELEVENLABS_PHONE_NUMBER_ID` in `.env` (import a Twilio number in
+  ElevenLabs dashboard → Phone Numbers). Untested until a number exists.
+- Offline test: `python -m tests.callqueue_test` (market seeding, guards, status
+  derivation).
+- Tunnel churn hurts: every cloudflared restart = new URL → update `.env` +
+  `python -m agents.provision` + API_BASE in Lovable. Current tunnel:
+  https://partner-may-cheers-switched.trycloudflare.com
+
 NOT yet done (needs Andrea's API keys / mic — in order):
 1. Fill `.env` (copy `.env.example`): ELEVENLABS_API_KEY, OPENAI_API_KEY,
    GOOGLE_PLACES_API_KEY and YELP_API_KEY (OSM needs no key).
