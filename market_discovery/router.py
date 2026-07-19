@@ -56,9 +56,9 @@ def discover_call_list(body: DiscoverCallListIn, job_id: str,
 
     # Keep the call list separate from companies/quotes until a call is scheduled.
     # This prevents uncalled discovery results from appearing as declines in the report.
-    # Partial scans (a source skipped/failed) are saved too: the demo market is
-    # built FROM this list, and Google+OSM alone is a perfectly good list.
-    result["saved"] = bool(result["items"])
+    # Persist only a complete, reproducible scan. Partial results are returned
+    # for diagnosis but never silently replace the last complete call list.
+    result["saved"] = bool(result["items"] and result.get("complete"))
     if result["saved"]:
         job["call_list"] = result
         db.put("jobs", job_id, job)

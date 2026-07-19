@@ -1,187 +1,210 @@
-# CLAUDE.md — session handoff for QuoteWise (ElevenLabs "The Negotiator" challenge)
+# CLAUDE.md — session handoff for QuoteWise
 
-Claude Code loads this file automatically at the start of every session. It is the
-single source of truth for project state; update it when state changes.
+Claude Code loads this file automatically. Keep it aligned with implementation and with
+the proof status in `docs/DEMO_SCRIPT.md`.
 
-## What this is
+## Product and fixed decisions
 
-Hack-Nation 6th Global AI Hackathon, **ElevenLabs "The Negotiator" challenge**:
-voice agents that phone a market, gather comparable itemised quotes, and negotiate.
-Full brief context and judging criteria: see `docs/DEMO_SCRIPT.md` (each demo beat
-maps to a success criterion).
+QuoteWise targets the ElevenLabs **The Negotiator** challenge: one confirmed job spec,
+comparable market calls, grounded negotiation, and a ranked evidence-backed report.
 
-Decisions (made 2026-07-18, do not re-litigate):
-- **The product is domain-agnostic via "domain sheets"** (`verticals/*.yaml`, one per
-  vertical+area, AI-writable). **MVP domain: plumbing** (sheet `verticals/plumbing.yaml`,
-  area 28202). Moving stays as the second sheet proving the swap.
-- **Counterparties: agent-to-agent** (3 personas with hidden pricing policies)
-  **+ human-in-the-loop mode** (`--human`, user answers via mic). Twilio = stretch only.
-- **Stack: Python/FastAPI backend + Lovable frontend** (prompt in `docs/LOVABLE_PROMPT.md`).
-- Credits available: ElevenLabs, OpenAI (vision doc parsing + sheet generation),
-  Google Places and Yelp (call-list discovery); OSM/Overpass needs no API key.
+Decisions made 2026-07-18:
 
-## Architecture in one paragraph
+- Domain behavior is configuration in `verticals/<domain>[-<area>].yaml`. The MVP is
+  **residential plumbing / 28202**; moving remains the second proof-of-swap sheet.
+- Market discovery uses Google Places + Yelp + OSM, but the callable scheduler promotes
+  every eligible **Google Places** vendor by default.
+- `DEBUG_CALLS=true` is the safe global default for bulk work: real Google identities,
+  deterministic synthetic transcripts and structured results, no phone call,
+  ElevenLabs conversation, counter-agent, or audio.
+- `DEBUG_CALLS=false` is still not authority to dial real businesses:
+  `LIVE_VENDOR_CALLS_ENABLED=true` is a separate operator gate.
+- The live hackathon path is human-in-the-loop through
+  `POST /api/jobs/{id}/calls/demo`. The server, not the client, supplies the single
+  allow-listed `DEMO_PHONE_NUMBER`; Twilio is imported through ElevenLabs via
+  `ELEVENLABS_PHONE_NUMBER_ID`.
+- Never use a debug transcript as proof of a live voice criterion. Use separate jobs for
+  debug scale and live qualifying evidence.
+- Stack: FastAPI/SQLite backend plus external Lovable frontend.
 
-`verticals/<domain>[-<area>].yaml` is a **domain sheet** — estimator persona, base
-form questions, spec schema, benchmark price model (generic `rate_card`: callout +
-hours×rate + parts + declarative modifiers; moving keeps its bespoke crew model),
-red-flag rules, fee taxonomy, negotiation levers, honesty policy.
-`negotiator/packs.py` loads/validates sheets by (vertical, area) with fallback to
-the domain base sheet; `negotiator/packgen.py` lets the AI WRITE a new sheet
-(OpenAI, validated, `python -m negotiator.packgen --vertical hvac --area 28203` or
-`POST /api/verticals/generate`). The intake form = sheet base questions **+
-learned questions** (`learned_questions` table, per vertical+area). Decision
-(Andrea, 2026-07-18): new price factors are discovered on VENDOR calls (caller
-phase — `log_learned_questions` wiring there is TODO), NEVER asked of the
-customer; the estimator only CONSUMES the pool via `get_intake_form`. Learned
-questions surface to the user on the job and join every future form in that area
-(`GET /api/intake-form`).
-`agents/prompts.py` GENERATES all system prompts from the sheet (estimator /
-caller / closer + one per counterparty persona in `agents/personas.yaml`).
-`agents/provision.py` upserts 6 agents + 7 webhook tools to ElevenLabs (ids cached
-in `agents/registry.json`, gitignored). Mid-call, agents hit `/agent-tools/*`
-webhooks on the FastAPI server (`negotiator/server.py`), which writes SQLite
-(`data/negotiator.db`, gitignored). **Honesty is architectural**: the closer's only
-source of competing bids is the `get_competing_quotes` webhook (reads the real
-quote DB); counterparties get hidden ground-truth pricing from `counterparty_pricing`
-(only tool they have). Agent-to-agent calls run over `simulation/bridge.py`: two
-live ElevenLabs `Conversation` sessions with custom `AudioInterface`s piping
-real-time-paced pcm_16000 into each other (real barge-in; `interrupt()` flushes).
+## Architecture
 
-## Current state (2026-07-18)
+`negotiator/packs.py` loads and validates domain sheets. Intake arrives through the
+ElevenLabs Estimator, schema-driven web form, or document parser and converges on
+`job.spec`; any edit resets confirmation. `negotiator/spec_validation.py` performs deep
+type/enum/nested validation before confirmation.
 
-DONE and verified offline:
-- Full backend loop passes `.venv/bin/python -m tests.smoke_test` (moving, no API keys):
-  spec-confirmation guard (409 before confirm), red-flag engine (lowballer trips all 5),
-  leverage gate (excludes company being called), report ranking (negotiated binding
-  price-match wins, flagged-cheapest ranks last, $876 negotiation delta).
-- **Estimator module is domain-sheet-driven** and passes `.venv/bin/python -m tests.estimator_test`
-  (plumbing, no API keys): sheet load/validate + area fallback, per-(vertical,area) jobs,
-  rate-card benchmark with modifiers, learned-questions loop (log → dedupe/times_seen →
-  next form in same area includes them → isolated from other domains), red flags on the
-  plumbing pack. Both estimator prompts (plumbing/moving) render with the new
-  get_intake_form / log_learned_questions tooling.
-- All modules import against elevenlabs SDK **2.58.0**; `AudioInterface` contract
-  (start/stop/output/interrupt) and `ConversationInitiationData(dynamic_variables=...)`
-  confirmed against installed SDK. Prompts render `{{job_id}}` etc. correctly.
-- `agents/provision.py` now provisions 9 tools (added get_intake_form,
-  log_learned_questions); estimator owns both plus save_job_spec. **Never run live yet.**
-- `negotiator/packgen.py` (AI sheet writer) is code-complete but untested live.
-- **Browser voice intake**: `POST /api/jobs/{id}/voice-session` (owner-scoped)
-  returns an ElevenLabs signed wss URL + `{job_id}` dynamic variables; the Lovable
-  frontend uses `@elevenlabs/react` `startSession({signedUrl, dynamicVariables})`
-  with the user's mic. Endpoint live-tested (real signed URL returned); the full
-  browser call is untested until the Lovable app exists. CLI `run_intake` remains
-  the fallback path.
-- **Document intake works LIVE** (verified with a real OpenAI parse): PDFs/photos/text
-  via `POST /api/jobs/{id}/documents` — schema-driven retrieval against the job's pack,
-  merged into the call's spec: docs fill gaps AND can UPDATE fields already on file
-  (parser emits corrections only when the document is more authoritative; every change
-  tracked as a `{field, from, to}` diff on the document record for the frontend),
-  quotes accumulate in `spec.existing_quotes` as closer leverage, insights append to
-  notes, any change resets confirmation. Files land in `data/uploads/{job_id}/`;
-  `GET .../documents` lists them. Offline test: `python -m tests.documents_test`
-  (parser mocked). PDF path uses OpenAI file content parts — live-tested only with
-  text so far.
-- **State-wide call-list discovery** is isolated in `market_discovery/`: Google
-  Places + Yelp + OSM/Overpass adapters, full-state grid/boundary search, E.164 phone
-  normalization, cross-source dedupe and partial-failure handling. Results are cached
-  separately on the job (not in `companies`, so uncalled leads do not pollute reports).
-  Frontend contract: `POST /api/jobs/{id}/call-list/discover` and
-  `GET /api/jobs/{id}/call-list`. Offline service + authenticated endpoint test:
-  `python -m tests.market_discovery_test`.
+Discovery records remain real. `negotiator/callrunner.py` idempotently promotes all
+callable Google Places leads, freezes the confirmed spec for the run, computes
+`ceil(sqrt(n))`, and partitions vendors into synchronous-barrier batches. Calls inside a
+batch run concurrently. All receive one immutable context from
+`negotiator/knowledge.py`; results become visible only after every member is terminal
+and the next knowledge version opens. Context separates the vendor's own quote history
+from exact allowed competitive claims.
 
-- **THE CALLER MODULE IS LIVE-PROVEN** (2026-07-18 evening): server-side call
-  orchestration in `negotiator/callrunner.py` (`POST /api/jobs/{id}/calls/start`,
-  `GET /api/jobs/{id}/call-queue` — statuses to_call/queued/calling/quote/callback/
-  decline/hangup derived from real DB records). First successful live agent-to-agent
-  bridge call: Caller vs plumbing lowballer — AI disclosure, in-character robot
-  reaction, hidden-fee extraction (anchor $1,400 → real all-in $2,572 itemised in 5
-  codes, non_binding flag, verbatim evidence, outcome=quote, transcript+recording
-  fetched). Bridge deadlock FIXED in `simulation/bridge.py`: speech is held until the
-  peer connects (the greeting was being dropped) and the pump sends continuous
-  zero-frames as silence so ASR can close turns. `conversation_id` read from
-  `_conversation_id`. Report/queue use the LATEST initial quote (callers refine
-  mid-call).
-- **Counterparty personas are per-domain**: `agents/personas/{plumbing,moving}.yaml`
-  (3 styles each, stable ids), `config.personas(vertical)`; prompts + first_message
-  use `{{company_name}}` so any company name can wear a persona. Provision reads
-  persona `first_message` from yaml.
-- **Synthetic market from real places** (Andrea's decision: NEVER call real
-  businesses): `POST /api/jobs/{id}/companies/from-call-list` promotes discovered
-  Google/OSM leads to companies with `source="synthetic"` + personas round-robin —
-  real name on the board, simulated behavior. Discovery router now saves partial
-  scans too (Google+OSM without Yelp is a valid list).
-- **Real outbound call for the live demo** (Andrea on the phone as the vendor):
-  `POST /api/jobs/{id}/calls/real {to_number, phase}` via ElevenLabs native Twilio
-  outbound. NEEDS `ELEVENLABS_PHONE_NUMBER_ID` in `.env` (import a Twilio number in
-  ElevenLabs dashboard → Phone Numbers). Untested until a number exists.
-- Offline test: `python -m tests.callqueue_test` (market seeding, guards, status
-  derivation).
-- Tunnel churn hurts: every cloudflared restart = new URL → update `.env` +
-  `python -m agents.provision` + API_BASE in Lovable. Current tunnel:
-  https://partner-may-cheers-switched.trycloudflare.com
+Mode selection:
 
-NOT yet done (needs Andrea's API keys / mic — in order):
-1. Fill `.env` (copy `.env.example`): ELEVENLABS_API_KEY, OPENAI_API_KEY,
-   GOOGLE_PLACES_API_KEY and YELP_API_KEY (OSM needs no key).
-2. `uvicorn negotiator.server:app --port 8000` + `ngrok http 8000` → set PUBLIC_BASE_URL
-   in `.env` → `python -m agents.provision`. **Provisioning has never run live** — if
-   ElevenLabs rejects payloads, fix `_tool_body`/`_agent_body` in `agents/provision.py`
-   (endpoints: POST /v1/convai/tools, /v1/convai/agents/create, PATCH to update).
-3. **First live bridge call is the top risk** — audio pacing vs real agents is the one
-   thing offline tests can't prove. Test: seed with `--with-sample-spec`, then
-   `python -m simulation.run_calls --job job_X --phase quote --company co_X --listen`.
-4. Voice modes need `brew install portaudio && pip install pyaudio`.
-5. First live `packgen` run (e.g. `--vertical hvac --area 28203`) — the "AI writes the
-   config sheet" demo beat; validate output loads before showing it.
-6. `docs/LOVABLE_PROMPT.md` is rewritten for the domain-sheet backend (jobs list,
-   schema-driven intake form + learned questions, domains page with AI generation)
-   and has the live tunnel URL baked in — update API_BASE in Lovable if the tunnel
-   restarts. `docs/DEMO_SCRIPT.md` is still moving-era: refresh before rehearsing.
+- debug on → `negotiator/debugcalls.py`, transcript-only;
+- debug off + Google vendor → ElevenLabs native Twilio batch calling;
+- simulated company → live ElevenLabs agent-to-agent bridge;
+- explicit `/calls/demo` → configured human demo phone, even while bulk debug remains on.
 
-## Users & auth
+The Caller and Closer log quote/outcome by exact `call_id`. Negotiated quotes carry
+`leverage_quote_ids`, checked against that call's frozen allowed claims. Voice
+finalization fetches ElevenLabs transcript/audio, verifies verbatim evidence, infers a
+structured outcome if the agent omitted it, and **always** runs the backend learning
+pass. `negotiator/learnings.py` extracts customer questions from contingent items,
+conditions, and vendor speech, deduplicates per `(vertical, area_code)`, and records
+`times_seen`, source calls, and companies. After every barrier,
+`knowledge.follow_up_plan` writes explainable recall recommendations; it never dials by
+itself.
+`negotiator/recall_limits.py` atomically consumes at most two recall slots per
+job/vendor. Reserved, running, failed, and completed attempts all count; configuration
+may lower this limit but cannot raise it above two.
 
-`negotiator/auth.py`: PBKDF2-salted passwords, opaque bearer tokens in SQLite
-(`users`/`sessions` tables). Every `/api` job route requires `Authorization:
-Bearer <token>` and is owner-scoped (someone else's job = 404); public: auth
-endpoints, `/api/verticals`, `/api/intake-form`. `/agent-tools/*` stays open —
-ElevenLabs calls it, not users. `POST /api/auth/register|login` → `{token,user}`;
-`GET /api/me` → profile + own jobs. Demo account (seed creates it, owns all
-pre-auth jobs): **demo@negotiator.app / demo1234**. Offline test:
-`python -m tests.auth_test`.
+The Calls board polls `/call-queue` for risk-adjusted best offer, offer range,
+called/total, batch status, knowledge version, and follow-up annotations. Recordings are
+exposed only through the owner-scoped
+`GET /api/jobs/{job_id}/calls/{call_id}/audio`; debug calls correctly return 404.
+
+## Current state — 2026-07-18
+
+Verified offline:
+
+- `tests.debugcalls_test`: deterministic quote transcripts for three style policies,
+  no network/ElevenLabs/audio, real vendor records unchanged, evidence included in the
+  generated transcript, grounded negotiation only with exact own/competing history.
+- `tests.batching_test`: 10 vendors → batches 4/4/2, hard barrier, knowledge versions
+  0/1/2, no within-batch leakage, all-vendor completion, live queue summary, mandatory
+  learning marker, and grounded single-vendor recall.
+- `tests.learnings_test`: normalized upsert/dedup, idempotent call replay, provenance,
+  concurrent completion safety, area isolation, transcript/condition/contingent
+  extraction, and generic fallback.
+- `tests.spec_validation_test`: confirmation rejects malformed schema values and accepts
+  a valid domain spec.
+- Existing offline suites cover red flags/ranking (`smoke_test`), estimator and learned
+  intake (`estimator_test`), documents (`documents_test`), discovery
+  (`market_discovery_test`), queue guards (`callqueue_test`), and auth (`auth_test`).
+- Document text parsing has previously been exercised against OpenAI; PDF/photo paths
+  remain dependent on live service behavior.
+- One earlier agent-to-agent plumbing call produced transcript and recording, but this
+  is not evidence of three live styles or the Twilio demo requirement.
+
+Implemented but **not yet live-proven**:
+
+1. The allow-listed `/calls/demo` Twilio + ElevenLabs call reaching the configured
+   human phone and finalizing its transcript/MP3.
+2. Three distinct live role-play quote calls on a clean job.
+3. One live follow-up where price or terms measurably move because of an exact competing
+   quote collected in those live calls.
+4. End-to-end Lovable playback through the authenticated audio endpoint.
+5. Bulk `DEBUG_CALLS=false` against Google vendor phone numbers. Do not exercise this
+   without explicit authorization; it is not needed for the allow-listed demo.
+
+Do not change any item above to “live tested” until the corresponding call records,
+transcripts, and recordings exist. The judge-facing checkbox is in
+`docs/DEMO_SCRIPT.md`.
+
+## Runtime/API contract
+
+- `GET /api/runtime-config` → debug behavior plus masked demo/Twilio readiness.
+- `POST /api/jobs/{id}/call-list/discover` and `GET .../call-list` → discovery.
+- `POST /api/jobs/{id}/companies/from-call-list {}` → promote all callable Google
+  vendors. `count=0` means all; positive count exists only for old/diagnostic clients.
+- `POST /api/jobs/{id}/calls/start {phase, company_ids?, retry_completed?,
+  recommended_only?, idempotency_key?}` → atomic/idempotent background run.
+  `parallel` is deprecated and ignored.
+- `GET /api/jobs/{id}/call-queue` → live summary, batches, rows, and follow-ups.
+- `GET /api/jobs/{id}/follow-ups` → recommendations and source quote IDs; no auto-dial.
+- `POST /api/jobs/{id}/calls/demo {company_id, phase}` → only the configured demo
+  destination; no `to_number` in the request.
+- `GET /api/jobs/{id}/calls` → transcripts plus `has_audio`/`audio_url`, never raw paths.
+- `GET /api/jobs/{id}/calls/{call_id}/audio` → authenticated MP3 or 404.
+- `GET /api/jobs/{id}/report` → ranking with quote/call IDs, evidence verification kind,
+  and audio URL when present.
+
+Every `/api` job route is bearer-authenticated and owner-scoped. `/agent-tools/*`
+is machine-to-machine and requires the provisioned `X-QuoteWise-Tool-Key` secret;
+late writes to terminal calls are rejected.
+
+## Environment and provisioning
+
+Required/important `.env` values:
+
+```dotenv
+VERTICAL=plumbing
+DEBUG_CALLS=true
+LIVE_VENDOR_CALLS_ENABLED=false
+ELEVENLABS_API_KEY=
+OPENAI_API_KEY=
+GOOGLE_PLACES_API_KEY=
+YELP_API_KEY=
+PUBLIC_BASE_URL=https://YOUR-PUBLIC-TUNNEL.example
+AGENT_TOOL_SECRET=
+ELEVENLABS_PHONE_NUMBER_ID=
+DEMO_PHONE_NUMBER=
+CALL_BATCH_TIMEOUT_SECS=900
+CALL_POLL_INTERVAL_SECS=2
+CALL_RUN_LEASE_SECS=2100
+MAX_VENDOR_RECALLS=2
+```
+
+Environment is loaded at import time: restart FastAPI after changing it. Re-run
+`python -m agents.provision` after changing prompts, tool schemas, a vertical sheet, or
+`PUBLIC_BASE_URL`. Never commit `.env`, the demo number, API keys, or
+`agents/registry.json`.
 
 ## Commands
 
 ```bash
-source .venv/bin/activate                                  # venv exists, deps installed
-python -m tests.smoke_test                                 # offline e2e check (moving)
-python -m tests.estimator_test                             # offline estimator/domain-sheet check (plumbing)
-python -m tests.market_discovery_test                      # offline call-list service + frontend API
-uvicorn negotiator.server:app --port 8000                  # API + agent-tool webhooks
-python -m agents.provision                                 # upsert agents/tools (re-run after prompt/URL changes)
-python -m negotiator.packgen --vertical hvac --area 28203  # AI-write a new domain sheet (needs OPENAI_API_KEY)
-curl "localhost:8000/api/intake-form?vertical=plumbing"    # form = base + learned questions
-python -m negotiator.seed --with-sample-spec               # demo job (confirmed) + 3 companies
-python -m simulation.run_intake --job job_X                # voice interview (mic)
-python -m simulation.run_calls --job job_X --phase quote|negotiate [--listen|--human|--parallel|--company co_X]
+source .venv/bin/activate
+
+# Offline verification
+make test
+
+# Focused suites
+python -m tests.debugcalls_test
+python -m tests.batching_test
+python -m tests.learnings_test
+python -m tests.spec_validation_test
+python -m tests.smoke_test
+python -m tests.estimator_test
+python -m tests.documents_test
+python -m tests.market_discovery_test
+python -m tests.callqueue_test
+python -m tests.auth_test
+python -m tests.runclaims_test
+python -m tests.recall_limits_test
+python -m tests.evidence_test
+python -m tests.provider_status_test
+
+# Runtime
+uvicorn negotiator.server:app --port 8000
+python -m agents.provision
+python -m negotiator.seed --with-sample-spec
+python -m simulation.run_intake --job job_X
 curl localhost:8000/api/jobs/job_X/report | python -m json.tool
 ```
 
-## Gotchas
+## Operational gotchas
 
-- Re-provision after ANY change to prompts, personas, vertical yaml, or PUBLIC_BASE_URL
-  (registry.json makes it a PATCH, ~10s).
-- `save_job_spec` intentionally resets `confirmed=false` — every spec change forces
-  re-confirmation before calls (this is a demo talking point, don't "fix" it).
-- Dynamic vars (job_id/company_id) reach tools by the LLM copying them from the prompt;
-  if a persona misroutes ids, tighten the tool param descriptions in provision.py.
-- Counterparty agents get NO logging tools by design; only caller/closer log.
-- Numbers sanity anchor (moving): sample job benchmark = fair $1,315–$2,940, median $1,935
-  (inside the brief's documented real spread $1,158–$6,506). Plumbing test job
-  (water heater, within-24h, 60-y-o house, tight access): fair $1,792–$4,257, median $2,688.
-- Learned questions live in `data/negotiator.db` (gitignored) keyed by (vertical, area_code):
-  they persist across jobs but NOT across a db wipe — re-demo the learning beat after wipes.
-- A job in an area with no dedicated sheet falls back to the domain's base sheet but keeps
-  its own learned-question pool — new areas work day one, sharpen over time.
-- Repo: https://github.com/andimatteo/conversational-agent (origin).
+- Bulk scheduling with no `company_ids` means every eligible Google vendor. A second
+  quote run skips completed vendors unless `retry_completed=true`.
+- Do not calculate concurrency in the UI; the backend always owns `ceil(sqrt(n))`.
+- The spec is frozen for the entire run; quote knowledge changes only between batches.
+- Follow-up recommendations are plans, not actions. Use `recommended_only=true` or
+  explicit company IDs to authorize recalls.
+- At most two recalls are ever reserved per job/vendor. A failed or queued attempt
+  still consumes a slot; the third request must remain rejected.
+- `DEBUG_CALLS=true` suppresses all bulk telephony, but `/calls/demo` intentionally
+  remains available to the one configured number.
+- Debug transcripts must remain visibly labelled `debug_generated`; they have no
+  conversation ID or recording.
+- Audio playback requires the same Bearer token as the Calls API.
+- Learned questions persist in `data/negotiator.db` per vertical+area and disappear if
+  the database is wiped.
+- Re-provision after tunnel churn; otherwise ElevenLabs tools call a stale URL.
+- Dynamic variables include job, company, call, batch, phase, and knowledge version.
+- Numbers sanity anchor: plumbing water-heater test spec has fair range approximately
+  $1,792–$4,257 and median $2,688; moving sample median is approximately $1,935.
+- Repository origin: https://github.com/andimatteo/conversational-agent

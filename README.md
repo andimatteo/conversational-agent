@@ -2,105 +2,206 @@
 
 <img src="assets/logo.png" width="160" alt="QuoteWise — crystal ball with a phone"/>
 
-Voice agents that call, compare, and haggle — built for the Hack-Nation × ElevenLabs
-challenge. Vertical: **household moving** (the market with the receipts: a documented
-$1,158–$6,506 spread for the same 45-mile move, FMCSA's 40% sight-unseen overrun stat,
-13k+ BBB complaints/yr).
+Voice agents that build one confirmed job specification, contact a market, compare
+itemised quotes, and negotiate with evidence. The MVP domain is **residential
+plumbing**; `verticals/moving.yaml` demonstrates that the same orchestration can be
+retargeted through configuration.
 
 ## The loop
 
-```
-01 ESTIMATOR                02 CALLER                     03 CLOSER
-voice interview  ─┐         calls each company,           calls back with leverage:
-                  ├─► one   describes the SAME spec,  ─►  real competing bids, fee
-document intake  ─┘  spec   extracts itemised quotes      challenges, price-match
-(photo / old quote)  (user  (3 distinct personas)         └─► ranked report with
-                   confirms)                                  transcript evidence
+```text
+01 ESTIMATOR             02 CALLER                         03 CLOSER
+voice interview ─┐       every Google vendor ─┐            verified own history
+                 ├─► one confirmed spec       ├─► quotes ─► + frozen competing bids
+document intake ─┘       sqrt(n) batches ─────┘            + ranked evidence/report
 ```
 
-Everything vertical-specific — spec schema, estimator questions, price benchmarks,
-red-flag rules, negotiation levers, fee taxonomy — lives in `verticals/moving.yaml`.
-Switching to auto body shops = writing `verticals/auto_body.yaml`. No code changes.
+Everything domain-specific—spec schema, intake questions, benchmark, fee taxonomy,
+red flags, negotiation levers, and disclosure policy—lives in `verticals/*.yaml`.
 
-**Honesty as architecture:** the Closer's only source of competitive claims is the
-`get_competing_quotes` webhook, which reads the real quote DB. It structurally cannot
-invent a bid. AI disclosure is in every opening line and the "am I talking to a robot?"
-answer is scripted honest. Every call must end through `log_call_outcome`
-(quote | callback | decline | hangup) — never "they said around two thousand."
+The scheduler freezes the confirmed spec for the whole run. For `n` eligible vendors,
+it executes batches of `ceil(sqrt(n))` concurrent calls. Every member of a batch sees
+the same knowledge snapshot; the next snapshot is published only after every call in
+the current batch reaches a terminal state. Competitive claims are correlated to exact
+quote IDs, and each vendor's prior offers are included as separate verified history.
 
-**The market** is three ElevenLabs counter-agents with *hidden* pricing policies
-(anchor, floor, concession rules, hidden fees) served by a private "back office" tool —
-prices move mid-call only when the negotiator earns it. Plus a human-in-the-loop mode
-where you answer the phone yourself.
+## Safe debug mode and live voice
 
-| Persona | Company | Style |
-|---|---|---|
-| stonewaller | Summit & Sons Moving | gruff; "we don't quote over the phone"; fair floor |
-| lowballer | QuickBudget Movers | 40%-below-market bait quote; fees revealed only under interrogation |
-| upseller | Premier Coast Van Lines | 1.45x anchor, auto-bundled add-ons, "price valid today" |
+`DEBUG_CALLS=true` is the default and the recommended mode for development and the
+scale portion of the demo.
+
+| Path | Destination | Transcript | Audio | Purpose |
+|---|---|---|---|---|
+| Bulk `/calls/start`, debug on | No phone call | Explicitly labelled synthetic | None | Safely exercise every real Google vendor identity, batching, quotes, learning, and follow-ups |
+| Bulk `/calls/start`, debug off | Each vendor's Google phone number | ElevenLabs voice transcript | Recording when available | Real authorized market calling only |
+| Explicit `/calls/demo` | Server-side `DEMO_PHONE_NUMBER` only | ElevenLabs voice transcript | Recording when available | Human-in-the-loop qualifying demo through Twilio |
+
+Debug bulk execution does **not** dial, create an ElevenLabs conversation, generate
+audio, or run counter-agents. Company name, phone, and Google Place identity remain the
+real discovery record; only the transcript and structured result are generated.
+`GET /api/runtime-config` is the backend-authoritative source for the UI mode banner.
+
+`POST /api/jobs/{job_id}/calls/demo` is the sole deliberate exception while debug is
+enabled. It cannot accept an arbitrary destination: the backend always dials the one
+allow-listed `DEMO_PHONE_NUMBER`, using the imported Twilio number in ElevenLabs, while
+the selected Google company supplies the vendor identity and grounded quote history.
+Bulk vendor telephony additionally requires `LIVE_VENDOR_CALLS_ENABLED=true`; turning
+debug off alone can never start calling real businesses.
+
+> The debug flow, including three deterministic styles, is verified offline. The
+> Twilio demo endpoint and the required live sequence of three distinct calls plus one
+> measurable concession still need to be rehearsed and proven before presentation.
 
 ## Setup
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-# for voice modes (intake / --listen / --human): brew install portaudio && pip install pyaudio
-cp .env.example .env       # fill in ElevenLabs, OpenAI, Google Places and Yelp keys
+cp .env.example .env
 ```
 
-Webhook tools need a public URL for the API server:
+Important `.env` settings:
+
+```dotenv
+VERTICAL=plumbing
+DEBUG_CALLS=true
+LIVE_VENDOR_CALLS_ENABLED=false
+ELEVENLABS_API_KEY=
+OPENAI_API_KEY=
+GOOGLE_PLACES_API_KEY=
+YELP_API_KEY=
+PUBLIC_BASE_URL=https://YOUR-TUNNEL.example
+ELEVENLABS_PHONE_NUMBER_ID=
+DEMO_PHONE_NUMBER=
+AGENT_TOOL_SECRET=
+```
+
+- Keep `DEBUG_CALLS=true` for transcript-only bulk runs.
+- Keep `LIVE_VENDOR_CALLS_ENABLED=false` unless real-business calling has been
+  explicitly approved. It is a second gate and is not needed for `/calls/demo`.
+- `DEMO_PHONE_NUMBER` is the single authorized human destination; keep its real value
+  only in `.env`.
+- `ELEVENLABS_PHONE_NUMBER_ID` is the Twilio number imported under ElevenLabs **Phone
+  Numbers**.
+- Restart the API after changing environment values. Re-run provisioning after prompt,
+  tool, vertical, or `PUBLIC_BASE_URL` changes.
 
 ```bash
-uvicorn negotiator.server:app --port 8000          # terminal 1
-ngrok http 8000                                    # terminal 2 → put https URL in .env as PUBLIC_BASE_URL
-python -m agents.provision                         # creates/updates 6 agents + 7 tools on ElevenLabs
+uvicorn negotiator.server:app --port 8000
+ngrok http 8000
+python -m agents.provision
 ```
 
-`agents/registry.json` remembers the ElevenLabs ids; re-running provision PATCHes in
-place (do this after any prompt/config/URL change).
+## Transcript-only end-to-end run
 
-## Run the demo
+All product endpoints require `Authorization: Bearer <token>` unless documented
+otherwise.
+
+1. Create a job, complete voice/document intake, and confirm the spec.
+2. Discover the market with `POST /api/jobs/{job_id}/call-list/discover`.
+3. Promote **all** callable Google Places results. Omitting `count`, or sending `0`,
+   means all vendors:
+
+```http
+POST /api/jobs/{job_id}/companies/from-call-list
+{}
+```
+
+4. Start quote gathering. `parallel` is deprecated and ignored; the server always
+   computes the batch policy:
+
+```http
+POST /api/jobs/{job_id}/calls/start
+{"phase":"quote","idempotency_key":"ui-generated-uuid"}
+```
+
+5. Poll `GET /api/jobs/{job_id}/call-queue`. Its summary contains the current
+   risk-adjusted best offer, observed offer range, and `called/total`; `batch` exposes
+   index, size, completion barrier, and knowledge version.
+6. Inspect `GET /api/jobs/{job_id}/follow-ups`. Recommendations are explainable and do
+   not dial automatically. Run selected recalls with either explicit `company_ids` or:
+
+```http
+POST /api/jobs/{job_id}/calls/start
+{"phase":"negotiate","recommended_only":true}
+```
+
+Every terminal vendor call performs a backend learning pass, even if the agent omitted
+its logging tool. Price-relevant questions derived from contingent fees, conditions,
+and vendor transcript evidence are deduplicated by `(vertical, area_code)`, retain call
+and company provenance, appear on the job when new, and feed future intake forms.
+Any second or later attempt to the same vendor is a recall. At most **two recalls per
+job/vendor** are allowed across quote retries, negotiations, and live-demo calls;
+reserved, running, failed, and completed attempts all consume a slot.
+
+## Allow-listed live demo
+
+Use a fresh job so qualifying live evidence is not mixed with debug-generated quotes.
+After configuring and provisioning Twilio/ElevenLabs, select a Google company already
+attached to the job:
+
+```http
+POST /api/jobs/{job_id}/calls/demo
+{"company_id":"co_example","phase":"quote"}
+```
+
+The response masks the configured destination. Poll the call queue until terminal,
+then use:
+
+- `GET /api/jobs/{job_id}/calls` for transcript metadata and `audio_url`;
+- `GET /api/jobs/{job_id}/calls/{call_id}/audio` for authenticated MP3 playback;
+- `GET /api/jobs/{job_id}/report` for ranked, transcript-verified evidence.
+
+Debug calls intentionally have no audio and the audio endpoint returns 404 for them.
+The demo itself is submitted as an ElevenLabs native batch with one recipient, which
+provides terminal recipient tracking and cancellation without exposing a destination
+field to the browser.
+See `docs/DEMO_SCRIPT.md` for the qualifying three-call plus concession checklist.
+
+## Offline verification
 
 ```bash
-python -m negotiator.seed --with-sample-spec       # Daniel's Rock Hill→Charlotte 2BR move + 3 companies
-# — or the full intake path:
-python -m negotiator.seed                          # empty job
-python -m simulation.run_intake --job job_XXXX     # voice interview (mic)
-curl -F "file=@samples/existing_quote.txt" localhost:8000/api/jobs/job_XXXX/documents
-curl -X POST localhost:8000/api/jobs/job_XXXX/confirm    # user signs off — calls unlock
+make test
 
-python -m simulation.run_calls --job job_XXXX --phase quote --listen     # 3 quote calls
-python -m simulation.run_calls --job job_XXXX --phase negotiate --listen # closer calls back with leverage
-python -m simulation.run_calls --job job_XXXX --phase quote --human      # YOU answer via mic
-
-curl localhost:8000/api/jobs/job_XXXX/report | python -m json.tool       # ranked, evidence-backed
-# real-world call list from Google Places + Yelp + OSM
-curl -X POST localhost:8000/api/jobs/job_XXXX/call-list/discover \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"state":"North Carolina","target_per_provider":250}'
+# Or run a focused suite:
+python -m tests.smoke_test
+python -m tests.estimator_test
+python -m tests.documents_test
+python -m tests.market_discovery_test
+python -m tests.callqueue_test
+python -m tests.debugcalls_test
+python -m tests.batching_test
+python -m tests.learnings_test
+python -m tests.spec_validation_test
+python -m tests.auth_test
+python -m tests.runclaims_test
+python -m tests.recall_limits_test
+python -m tests.evidence_test
+python -m tests.provider_status_test
 ```
 
-Recordings land in `data/recordings/` (per-side WAVs + the ElevenLabs conversation MP3);
-transcripts are pulled from the ElevenLabs conversation API onto each call record.
+`make test` runs the full offline suite. The debug and batching tests assert no telephony/audio, deterministic distinct styles,
+`10 → 4/4/2` batching, hard batch barriers, frozen knowledge, grounded recalls, the
+mandatory learning pass, atomic run ownership, provider-state reconciliation, and the
+two-recall hard cap. They do not prove Twilio connectivity or live conversation
+quality.
 
-## Repo map
+## Repository map
 
+```text
+verticals/                 domain sheets: schemas, benchmarks, red flags, levers
+agents/                    generated prompts, personas, ElevenLabs provisioning
+market_discovery/          Google Places + Yelp + OSM discovery and normalization
+negotiator/debugcalls.py   deterministic transcript-only vendor simulation
+negotiator/callrunner.py   all-vendor scheduler, batches, barriers, debug/live modes
+negotiator/knowledge.py    frozen snapshots, grounded history, follow-up planning
+negotiator/evidence.py     post-call monetary/competitor grounding validation
+negotiator/runclaims.py    atomic run leases, idempotency and crash fencing
+negotiator/recall_limits.py persistent maximum-two recall guard
+negotiator/learnings.py    mandatory post-call question extraction and persistence
+negotiator/report.py       ranking and transcript/audio evidence
+negotiator/server.py       authenticated product API and agent webhooks
+simulation/                ElevenLabs audio bridge, mic mode, transcript/audio finalizer
+docs/DEMO_SCRIPT.md        judge-facing debug/live run-of-show and proof checklist
 ```
-verticals/moving.yaml     the vertical pack (THE config — schema, benchmarks, red flags, levers)
-agents/personas.yaml      the simulated market: hidden pricing policies per persona
-agents/prompts.py         all conversation design, generated from the vertical pack
-agents/provision.py       creates agents + webhook tools on ElevenLabs (idempotent)
-negotiator/server.py      FastAPI: product API + mid-call agent-tool webhooks
-negotiator/benchmarks.py  price model, red-flag engine, counterparty ground truth
-negotiator/report.py      ranking + plain-language recommendation with citations
-negotiator/docparse.py    document intake (OpenAI vision) → same spec schema
-market_discovery/        state-wide Google Places + Yelp + OSM call-list discovery
-simulation/bridge.py      agent↔agent real-time audio bridge (paced PCM, real barge-in)
-simulation/run_calls.py   orchestrates quote/negotiate calls; human mode; parallel mode
-docs/DEMO_SCRIPT.md       judge-facing run-of-show mapped to the success criteria
-docs/LOVABLE_PROMPT.md    paste into Lovable to generate the dashboard (API contract included)
-```
-
-If an ElevenLabs API shape has drifted (they ship fast), the two touchpoints are
-`agents/provision.py` (`/v1/convai/tools`, `/v1/convai/agents/create`) and the SDK's
-`Conversation` class used in `simulation/`.

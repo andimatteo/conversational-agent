@@ -15,14 +15,17 @@ import tempfile
 # Isolate ALL storage (DB, uploads) in a throwaway dir — tests must never
 # pollute the real data/negotiator.db (learned questions, jobs, users).
 os.environ.setdefault("NEGOTIATOR_DATA_DIR", tempfile.mkdtemp(prefix="negotiator-test-"))
+os.environ.setdefault("AGENT_TOOL_SECRET", "offline-test-tool-secret")
 import uuid
 
 from fastapi.testclient import TestClient
 
 import negotiator.docparse as docparse
+from negotiator.config import AGENT_TOOL_SECRET
 from negotiator.server import app
 
 c = TestClient(app)
+TOOL_H = {"X-QuoteWise-Tool-Key": AGENT_TOOL_SECRET}
 
 
 def _auth() -> dict:
@@ -78,7 +81,9 @@ def main():
 
     # --- doc 2: a photo adding a second quote --------------------------------
     docparse.parse_document = _fake_parser({
-        "existing_quote": {"company": "Budget Rooter", "total": 1100, "line_items": []}})
+        "existing_quote": {"company": "Budget Rooter", "total": 1100,
+                           "line_items": [{"label": "all-in documented scope",
+                                           "amount": 1100}]}})
     c.post(f"/api/jobs/{job['id']}/documents", headers=h,
            files={"file": ("photo.jpg", b"\xff\xd8fake", "image/jpeg")}).raise_for_status()
 
@@ -88,12 +93,13 @@ def main():
 
     # --- the combined spec feeds the calls: leverage includes both quotes ----
     c.post(f"/api/jobs/{job['id']}/confirm", headers=h).raise_for_status()
-    r = c.post("/agent-tools/get_competing_quotes",
+    r = c.post("/agent-tools/get_competing_quotes", headers=TOOL_H,
                json={"job_id": job["id"], "company_id": "co_none"})
     companies = {q["company"]: q for q in r.json()["competing_quotes"]}
     assert companies["FastFlow Plumbing"]["phase"] == "document"
     assert companies["Budget Rooter"]["total"] == 1100
-    spec_for_calls = c.post("/agent-tools/get_job_spec", json={"job_id": job["id"]}).json()["spec"]
+    spec_for_calls = c.post("/agent-tools/get_job_spec", headers=TOOL_H,
+                            json={"job_id": job["id"]}).json()["spec"]
     assert spec_for_calls["property_age_years"] == 40 and spec_for_calls["job_type"] == "water_heater"
     print("combined spec OK: doc quotes are closer leverage, merged spec feeds the calls")
 

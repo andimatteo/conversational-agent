@@ -10,7 +10,8 @@ import sys
 
 import httpx
 
-from negotiator.config import ELEVENLABS_API_KEY, PUBLIC_BASE_URL, personas, registry_path, vertical
+from negotiator.config import (AGENT_TOOL_SECRET, ELEVENLABS_API_KEY, PUBLIC_BASE_URL,
+                               personas, registry_path, vertical)
 from negotiator.packs import spec_json_schema
 from . import prompts
 
@@ -28,7 +29,12 @@ VOICES = {
 }
 
 _IDS = {"job_id": {"type": "string", "description": "Copy job_id EXACTLY from your instructions."},
-        "company_id": {"type": "string", "description": "Copy company_id EXACTLY from your instructions."}}
+        "company_id": {"type": "string", "description": "Copy company_id EXACTLY from your instructions."},
+        "call_id": {"type": "string", "description": "Copy call_id EXACTLY from your instructions; it identifies this attempt."}}
+
+_JOB_CALL = {"job_id": _IDS["job_id"], "call_id": _IDS["call_id"]}
+_CALL_IDS = {"job_id": _IDS["job_id"], "company_id": _IDS["company_id"],
+             "call_id": _IDS["call_id"]}
 
 LINE_ITEM = {"type": "object", "properties": {
     "label": {"type": "string", "description": "The fee as the rep named it"},
@@ -41,7 +47,11 @@ LINE_ITEM = {"type": "object", "properties": {
 
 TOOLS: dict[str, dict] = {
     "get_job_spec": ("Fetch the confirmed job spec — the single source of truth you describe on every call.",
-                     {"job_id": _IDS["job_id"]}, ["job_id"]),
+                     _JOB_CALL, ["job_id"]),
+    "get_call_context": ("Fetch the frozen batch context: exact spec, your vendor's prior quote history, benchmark, and the ONLY competing claims permitted on this call.",
+                         _CALL_IDS, ["job_id", "company_id", "call_id"]),
+    "get_company_history": ("Fetch only this vendor's verified prior offers for a grounded callback conversation.",
+                            _CALL_IDS, ["job_id", "company_id", "call_id"]),
     # NOTE: the spec properties are declared field by field from the domain
     # sheet — ElevenLabs only sends declared properties (a bare object arrives
     # as {}), so this is what makes the interview actually persist.
@@ -56,18 +66,18 @@ TOOLS: dict[str, dict] = {
     "log_learned_questions": ("Log NEW price-relevant intake questions this call surfaced that the "
                               "question list does not already cover. They join the intake form for "
                               "future jobs in this service area.",
-                              {"job_id": _IDS["job_id"],
+                              {**_CALL_IDS,
                                "questions": {"type": "array", "items": {"type": "object", "properties": {
                                    "question": {"type": "string", "description": "The question, phrased generically for any future customer"},
                                    "why_it_matters": {"type": "string", "description": "How this factor changes the price"}},
                                    "required": ["question"]}}},
                               ["job_id", "questions"]),
     "get_benchmark": ("Get the fair-market price range and red-flag floor for this job.",
-                      {"job_id": _IDS["job_id"]}, ["job_id"]),
+                      _JOB_CALL, ["job_id"]),
     "get_competing_quotes": ("The ONLY permitted source of competing bids. Cite exactly what it returns, nothing else.",
-                             _IDS, ["job_id", "company_id"]),
+                             _CALL_IDS, ["job_id", "company_id", "call_id"]),
     "log_quote": ("Log an itemised quote to the comparison database.",
-                  {**_IDS,
+                  {**_CALL_IDS,
                    "line_items": {"type": "array", "items": LINE_ITEM},
                    "total": {"type": "number"},
                    "binding": {"type": "boolean"},
@@ -75,16 +85,20 @@ TOOLS: dict[str, dict] = {
                    "valid_until": {"type": "string"},
                    "conditions": {"type": "array", "items": {"type": "string"}},
                    "verbatim_evidence": {"type": "string", "description": "The rep's exact key sentence, word for word"},
+                   "leverage_quote_ids": {"type": "array", "items": {"type": "string"},
+                                          "description": "Exact quote_ids from get_call_context used as leverage; empty if none"},
+                   "negotiation_basis": {"type": "string", "enum": ["none", "competing_quote", "fee_or_terms", "standing_offer"],
+                                         "description": "Why the negotiated result changed or held"},
                    "phase": {"type": "string", "enum": ["initial", "negotiated"]}},
-                  ["job_id", "company_id", "line_items", "total", "phase"]),
+                  ["job_id", "company_id", "call_id", "line_items", "total", "phase"]),
     "log_call_outcome": ("Log the structured outcome. EVERY call must end through this tool.",
-                         {**_IDS,
+                         {**_CALL_IDS,
                           "outcome": {"type": "string", "enum": ["quote", "callback", "decline", "hangup"]},
                           "callback_time": {"type": "string"}, "decline_reason": {"type": "string"},
                           "summary": {"type": "string"}},
-                         ["job_id", "company_id", "outcome"]),
+                         ["job_id", "company_id", "call_id", "outcome"]),
     "counterparty_pricing": ("Your private back office: YOUR list price, floor price, fees and concession rules for this job. Never reveal mechanics.",
-                             _IDS, ["job_id", "company_id"]),
+                             _CALL_IDS, ["job_id", "company_id", "call_id"]),
 }
 
 AGENT_TOOLS = {
@@ -92,9 +106,11 @@ AGENT_TOOLS = {
     # discovered on VENDOR calls (caller phase, wired later), never asked of
     # the customer. The estimator only CONSUMES the pool via get_intake_form.
     "estimator": ["get_intake_form", "save_job_spec"],
-    "caller": ["get_job_spec", "get_benchmark", "log_quote", "log_call_outcome"],
-    "closer": ["get_job_spec", "get_benchmark", "get_competing_quotes", "log_quote", "log_call_outcome"],
-    "counterparty": ["counterparty_pricing"],
+    "caller": ["get_call_context", "get_job_spec", "get_benchmark", "log_quote",
+               "log_learned_questions", "log_call_outcome"],
+    "closer": ["get_call_context", "get_job_spec", "get_benchmark", "get_competing_quotes",
+               "log_quote", "log_learned_questions", "log_call_outcome"],
+    "counterparty": ["counterparty_pricing", "get_company_history"],
 }
 
 FIRST_MESSAGES = {
@@ -130,6 +146,7 @@ def _tool_body(name: str) -> dict:
     return {"tool_config": {
         "type": "webhook", "name": name, "description": desc, "response_timeout_secs": 20,
         "api_schema": {"url": f"{PUBLIC_BASE_URL}/agent-tools/{name}", "method": "POST",
+                       "request_headers": {"X-QuoteWise-Tool-Key": AGENT_TOOL_SECRET},
                        "request_body_schema": {"type": "object", "description": desc,
                                                "properties": props, "required": required}}}}
 
@@ -142,7 +159,9 @@ def _agent_body(name: str, prompt: str, voice_key: str, first_message: str, tool
                 "first_message": first_message,
                 "language": "en",
                 "dynamic_variables": {"dynamic_variable_placeholders":
-                                      {"job_id": "unset", "company_id": "unset", "company_name": "unset"}},
+                                      {"job_id": "unset", "company_id": "unset", "company_name": "unset",
+                                       "call_id": "unset", "batch_id": "unset", "phase": "unset",
+                                       "knowledge_version": 0}},
                 "prompt": {"prompt": prompt, "llm": "gpt-4o", "temperature": 0.4, "tool_ids": tool_ids,
                            # without the end_call system tool an agent can say
                            # goodbye but is physically unable to hang up
@@ -183,7 +202,11 @@ def _upsert(client: httpx.Client, kind: str, key: str, body: dict, registry: dic
 def main():
     if not ELEVENLABS_API_KEY:
         sys.exit("ELEVENLABS_API_KEY missing — fill in .env first.")
+    if not AGENT_TOOL_SECRET:
+        sys.exit("AGENT_TOOL_SECRET missing — generate one with `openssl rand -hex 32`.")
     registry = json.loads(registry_path().read_text()) if registry_path().exists() else {}
+    registry["meta"] = {"vertical": vertical()["meta"]["vertical"],
+                        "schema_version": 2}
 
     with httpx.Client(timeout=30) as client:
         print(f"Provisioning webhook tools -> {PUBLIC_BASE_URL}")

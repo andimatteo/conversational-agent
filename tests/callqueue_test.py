@@ -13,14 +13,17 @@ import tempfile
 # Isolate ALL storage (DB, uploads) in a throwaway dir — tests must never
 # pollute the real data/negotiator.db (learned questions, jobs, users).
 os.environ.setdefault("NEGOTIATOR_DATA_DIR", tempfile.mkdtemp(prefix="negotiator-test-"))
+os.environ.setdefault("AGENT_TOOL_SECRET", "offline-test-tool-secret")
 import uuid
 
 from fastapi.testclient import TestClient
 
 from negotiator import db
+from negotiator.config import AGENT_TOOL_SECRET
 from negotiator.server import app
 
 c = TestClient(app)
+TOOL_H = {"X-QuoteWise-Tool-Key": AGENT_TOOL_SECRET}
 
 SPEC = {"area_code": "28202", "job_type": "water_heater",
         "problem_description": "leaking heater", "property_type": "house",
@@ -70,11 +73,11 @@ def main():
     assert by_persona["lowballer"]["status"] == "calling"
 
     # quote logged + call ended -> outcome status with totals
-    c.post("/agent-tools/log_quote", json={
+    c.post("/agent-tools/log_quote", headers=TOOL_H, json={
         "job_id": job["id"], "company_id": cos["lowballer"], "phase": "initial",
         "total": 900, "binding": False,
         "line_items": [{"label": "all-in", "code": "base", "amount": 900, "kind": "base"}]})
-    c.post("/agent-tools/log_call_outcome", json={
+    c.post("/agent-tools/log_call_outcome", headers=TOOL_H, json={
         "job_id": job["id"], "company_id": cos["lowballer"], "outcome": "quote"})
     call = db.get("calls", "call_t1")
     call["ended_at"] = "2026-07-18T20:05:00Z"

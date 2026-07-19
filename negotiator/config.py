@@ -15,6 +15,40 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
 VERTICAL = os.getenv("VERTICAL", "moving")
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Safe-by-default global switch.  In debug mode the scheduler keeps the real
+# Google Places company identity, but it never dials a phone, opens an
+# ElevenLabs conversation, or writes audio.  It only produces an explicitly
+# labelled synthetic transcript and structured result.
+DEBUG_CALLS = _env_bool("DEBUG_CALLS", True)
+
+# Defense in depth for real businesses: disabling debug is not by itself an
+# authorisation to dial the discovered market. The operator must explicitly
+# enable vendor telephony as a second server-side deployment decision. The
+# allow-listed human demo endpoint is separate and remains an explicit click.
+LIVE_VENDOR_CALLS_ENABLED = _env_bool("LIVE_VENDOR_CALLS_ENABLED", False)
+
+# The only destination accepted by the explicit live-demo endpoint.  Keeping
+# this server-side prevents the authenticated UI from becoming an arbitrary
+# outbound dialler.  The personal value belongs in .env, never in git.
+DEMO_PHONE_NUMBER = os.getenv("DEMO_PHONE_NUMBER", "").strip()
+ELEVENLABS_PHONE_NUMBER_ID = os.getenv("ELEVENLABS_PHONE_NUMBER_ID", "").strip()
+AGENT_TOOL_SECRET = os.getenv("AGENT_TOOL_SECRET", "").strip()
+
+CALL_BATCH_TIMEOUT_SECS = int(os.getenv("CALL_BATCH_TIMEOUT_SECS", "900"))
+CALL_POLL_INTERVAL_SECS = float(os.getenv("CALL_POLL_INTERVAL_SECS", "2"))
+CALL_RUN_LEASE_SECS = int(os.getenv("CALL_RUN_LEASE_SECS", "2100"))
+# Product safety invariant: configuration may lower this, never raise it above
+# the user's hard cap of two callbacks per vendor/job.
+MAX_VENDOR_RECALLS = min(2, max(0, int(os.getenv("MAX_VENDOR_RECALLS", "2"))))
+
 # Overridable so tests run on a throwaway dir instead of polluting the real
 # DB (learned questions, jobs) with test artifacts.
 DATA_DIR = Path(os.getenv("NEGOTIATOR_DATA_DIR", ROOT / "data"))

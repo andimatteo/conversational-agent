@@ -144,32 +144,67 @@ Empty state: "No jobs yet — create one and let QuoteWise do the calling."
   - Errors: 503 "Document parsing needs the OpenAI key on the server",
     415 lists accepted formats.
 
-### 4. Provider call list — `/job/:jobId/providers`
-This is the real-world market source for the Caller, separate from simulated demo
-personas. On page load call `GET /api/jobs/:jobId/call-list`. Show a state input,
-optional query (blank means the job's domain decides), a per-provider target, and
-fixed source badges for Google Places, Yelp and OpenStreetMap. They are mandatory,
-not checkboxes. "Build call list" calls
-`POST /api/jobs/:jobId/call-list/discover` with
-`{state, query, target_per_provider}`. State-wide discovery can take time:
-show a progress state without clearing the previously loaded list.
+### 4. Call list — `/job/:jobId/call-list`
+This is the real-world market source for the Caller. On load call
+`GET /api/jobs/:jobId/call-list`. Show state, optional query, target per provider,
+and fixed Google Places, Yelp and OpenStreetMap source badges. "Scan the market"
+calls `POST /api/jobs/:jobId/call-list/discover` with
+`{state, query, target_per_provider}` without clearing the previous saved list.
 
-Render `provider_status` cards with status, result count or reason. Show `total` and
-a searchable table from `items`: name, click-to-call `phone`, source chips from
-`sources`, rating/review count, city/address, and external URL. Treat one provider's
-error as partial failure when another returned data. Empty state: "Search an entire
-state to prepare the Caller's list." A 422 shows the backend detail; 502 says the
-search area could not be resolved. Show a prominent "3/3 sources complete" state
-when `complete=true`; otherwise show which mandatory source was skipped or failed and
-do not enable the Caller. A partial response has `saved=false` and is diagnostic only.
+Render `provider_status[source]` from `{status, results?, reason?}`, `total`,
+`raw_results`, and a searchable table from `items`: name, E.164 phone, sources,
+rating/reviews, address/city, categories and URL. Mark rows with a phone and
+`sources.includes("google_places")` as **Google · callable**. A partial scan has
+`complete=false, saved=false`: keep it visible for diagnosis but do not let it
+replace/prepare the market. Empty state: "Scan the market to find who we should call."
 
-### 5. Call board — `/job/:jobId/calls` (poll 5s)
-`GET /api/jobs/:jobId/companies` + `/calls` + `/quotes`.
-One row per company: name, persona style tag, latest call kind (quote/negotiate),
-outcome badge (quote=green, callback=amber, decline/hangup=gray), running quote
-total. Transcript in a slide-over: chat bubbles, role "agent" = our negotiator,
-"user" = the company rep; note "recording saved" when `audio_path` exists.
-Empty state: "The Caller hasn't dialed yet."
+For a non-empty saved list, count every Google-callable row and show one action:
+**Use all N Google vendors** →
+`POST /api/jobs/:jobId/companies/from-call-list {count: 0}`. Zero means all: never
+truncate to a top-N subset and do not offer fictional companies. Show the response
+`note`/`debug_mode`, refetch the call queue, and navigate to Calls.
+
+### 5. Calls — `/job/:jobId/calls` (poll 3s)
+Poll `GET /api/jobs/:jobId/call-queue`. Keep a sticky top panel driven by its
+server-computed `summary`: **Current best offer** (company, total, binding/flags),
+**Offer range** (`low–high`, count), and **Called** (`called / total`, plus calling).
+Do not calculate a cheapest winner in the browser.
+
+Below it show `batch` as "Batch index/count · completed/total · knowledge vN" with
+a progress bar and the explanation that every call in the batch uses one frozen
+knowledge snapshot; the server starts the next batch only after all calls finish.
+Rows from `queue` show company/source, status, phase, totals, flags, attempt count,
+batch/knowledge version and mode. Badge `debug_transcript`/`debug_generated` as
+**DEBUG-generated transcript**; `twilio_vendor`/`elevenlabs_voice` as **Real vendor
+voice call**; `agent_bridge` as **Agent voice simulation**; `demo_phone` as
+**Live demo · masked number**. Never imply a debug vendor was contacted.
+
+**Start quote calls** → `POST /api/jobs/:jobId/calls/start
+{phase: "quote", idempotency_key: <UUID>}`. Reuse that UUID only for transport retries.
+Never send `parallel`: the server schedules every eligible vendor in synchronous
+`ceil(sqrt(n))` batches. Disable mutations while `running` or `summary.calling > 0`.
+Render `follow_up_plan` with reasons, source quote IDs and knowledge version. Recall
+one or several vendors through `POST /api/jobs/:jobId/calls/start` with
+`{phase: "negotiate", company_ids: [id, ...], idempotency_key: <fresh UUID>}`;
+each is another attempt on the same row. Show `recalls_used/recalls_max` and disable
+recalls at 2/2; the backend rejects a third attempt even if an earlier one failed.
+
+The transcript slide-over reads `GET /api/jobs/:jobId/calls` + `/quotes`. Show a
+purple **Synthetic debug evidence — vendor not contacted, no recording** notice for
+`transcript_kind="debug_generated"`, or **Real voice transcript** for
+`elevenlabs_voice`. When `has_audio`, fetch `API_BASE + audio_url` with the Bearer
+header as a Blob and give its object URL to `<audio controls>`; revoke it on close.
+
+Add an explicit live-demo card with no raw phone input. Show only the allow-listed
+`demo_phone_masked` from `/api/runtime-config`, select an existing Google vendor and
+phase, then `POST /api/jobs/:jobId/calls/demo {company_id, phase}`. Require confirmation
+that this is a real Twilio/ElevenLabs call and the explicit exception to debug mode;
+enable only when both phone configuration flags are true and no call is active.
+
+After every newly terminal attempt (and on `running: true → false`), refetch the job,
+the area/domain intake form, queue, calls, quotes and report. Toast when the learned-
+question count grows so Intake and Spec update without a page reload. Empty state:
+"Prepare Google vendors from Call list to start gathering offers."
 
 ### 6. Comparison — `/job/:jobId/compare`
 `GET /api/jobs/:jobId/report`.
@@ -194,26 +229,52 @@ Empty state: "The Caller hasn't dialed yet."
 
 ## API shapes
 
+- Runtime config: `{debug_mode, debug_behavior, debug_notice,
+  demo_phone_configured, demo_phone_masked, twilio_number_configured,
+  live_vendor_calls_enabled}`. Fetch it
+  after auth; it is the only source of truth for execution mode.
 - Job: `{id, vertical, area_code, spec: {…domain fields…, existing_quotes?:
   [{company, total, line_items}]}, spec_source, confirmed, discovered_questions:
   [{question, why_it_matters}], documents: [{id, filename, uploaded_at,
   extracted_fields: [str], updates: [{field, from, to}], has_quote,
-  insights: [str]}], created_at}`
+  insights: [str]}], knowledge_version?, follow_up_plan?, created_at}`
 - Intake form: `{vertical, area_code, display_name, spec_schema: {required:
   [str], fields: {name: {type, values?, fields?, item_fields?, default?}}},
   base_questions: [str], learned_questions: [{question, why_it_matters,
   times_seen}]}`
+- Call list: `{generated_at, query, state, required_sources, complete, saved,
+  provider_status: {source: {status, results?, reason?}}, raw_results, total,
+  items: [{name, phone?, address?, city?, rating?, review_count?, sources,
+  source_ids?, categories?, url?}]}`
+- Call queue: `{debug_mode, debug_behavior, running, summary:
+  {current_best_offer: null|{company_id, company_name, quote_id, total, binding,
+  red_flags}, offer_range: null|{low, high, count}, called, total, calling,
+  excluded_unverified_offers},
+  batch: null|{run_id, index, count, size, status, knowledge_version, completed,
+  total}, follow_up_plan: [{company_id, company_name, reasons, source_quote_ids,
+  knowledge_version, attempts, max_attempts, status}], queue: [{company, status,
+  last_call_kind, conversation_id, initial_total, negotiated_total, red_flags, attempt_count,
+  recalls_used, recalls_max,
+  batch_index, knowledge_version, dial_mode, transcript_kind, follow_up}]}`
+- Call record: `{id, company_id, kind, outcome, transcript: [{role, text}],
+  transcript_kind: "debug_generated"|"elevenlabs_voice"|"none", has_audio,
+  audio_url, attempt_number?, batch_index?, knowledge_version?, mode?}`
 - Report: `{job, benchmark: {fair_low, median, fair_high, red_flag_floor},
   market_evidence: [str], ranking: [{company: {name, persona}, outcome,
   initial_total, negotiated_total, final_total, saved_in_negotiation, binding,
   line_items: [{label, code, amount, kind}], red_flags: [{id, severity, label}],
-  evidence: [{phase, verbatim, conversation_id}], score, calls: [{kind, outcome,
-  transcript: [{role, text}]}]}], recommendation: str}`
+  evidence: [{quote_id, phase, verbatim, conversation_id, call_id,
+  verified_in_transcript, kind, audio_url}], score, calls: [{kind, outcome,
+  transcript, transcript_kind}]}], recommendation: str}`
 - Quotes: `[{company_id, phase: "initial"|"negotiated", total, binding, deposit,
-  line_items, red_flags, verbatim_evidence, conversation_id}]`
+  line_items, red_flags, verbatim_evidence, conversation_id, call_id?,
+  knowledge_version?, evidence_kind?, evidence_verified?}]`
 
 ## Navigation & quality bar
 
 Left sidebar: logo + wordmark, then Jobs, Domains, Profile. Per-job tab bar:
-Intake, Spec, Calls, Compare. Small reusable components; loading skeletons; the
-specified empty states; toasts for every mutation.
+**Intake, Spec, Call list, Calls, Compare**. After authentication the app shell calls
+`GET /api/runtime-config`: when `debug_mode=true`, a persistent global banner above
+all routes displays **DEBUG · transcript only** plus `debug_notice`; it is not a
+client toggle. When false, show a compact Live outbound status chip. Small reusable
+components; loading skeletons; the specified empty states; toasts for every mutation.

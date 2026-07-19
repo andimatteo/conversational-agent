@@ -8,13 +8,15 @@ Honesty is architecture here: the negotiator agent has no way to state a
 competing bid except get_competing_quotes, which reads the real quote DB.
 It structurally cannot invent leverage.
 """
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field
 
 from . import auth, db
 from .benchmarks import counterparty_pricing, evaluate_red_flags, market_range
-from .config import UPLOADS_DIR, personas, vertical
+from . import config
+from .config import RECORDINGS_DIR, UPLOADS_DIR, personas, vertical
 from .models import Company, Job, LearnedIn, LoginIn, OutcomeIn, QuoteIn, RegisterIn
 from .packs import list_packs, load_pack
 from .report import build_report
@@ -23,6 +25,26 @@ from market_discovery.router import router as call_list_router
 app = FastAPI(title="QuoteWise")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(call_list_router)
+
+
+@app.middleware("http")
+async def protect_agent_tools(request: Request, call_next):
+    """Agent mutation/read tools are machine-to-machine endpoints, not a
+    public second API. The provisioner attaches this header to every tool."""
+    if request.url.path.startswith("/agent-tools/"):
+        import hmac
+        expected = config.AGENT_TOOL_SECRET
+        supplied = request.headers.get("X-QuoteWise-Tool-Key", "")
+        if not expected:
+            return JSONResponse(status_code=503,
+                                content={"detail": "AGENT_TOOL_SECRET is not configured"})
+        if not hmac.compare_digest(supplied, expected):
+            return JSONResponse(status_code=401, content={"detail": "invalid agent tool credentials"})
+    return await call_next(request)
+
+
+def _masked_phone(value: str) -> str:
+    return f"•••{value[-4:]}" if len(value) >= 4 else ""
 
 
 # --------------------------------------------------------------------------
@@ -52,6 +74,24 @@ def logout(authorization: str = Header("")):
 def me(user: dict = Depends(auth.current_user)):
     """The user's profile with their own jobs — and nobody else's."""
     return {"user": auth.public(user), "jobs": _user_jobs(user)}
+
+
+@app.get("/api/runtime-config")
+def runtime_config(user: dict = Depends(auth.current_user)):
+    """Non-secret, backend-authoritative runtime mode for the global UI banner."""
+    return {
+        "debug_mode": config.DEBUG_CALLS,
+        "debug_behavior": "transcript_only" if config.DEBUG_CALLS else "voice_and_telephony",
+        "debug_notice": (
+            "Real Google vendor identities; no phone call, conversational session, or audio. "
+            "Transcripts and quotes are generated and explicitly labelled synthetic."
+            if config.DEBUG_CALLS else "Real outbound voice calls are enabled."
+        ),
+        "demo_phone_configured": bool(config.DEMO_PHONE_NUMBER),
+        "demo_phone_masked": _masked_phone(config.DEMO_PHONE_NUMBER),
+        "twilio_number_configured": bool(config.ELEVENLABS_PHONE_NUMBER_ID),
+        "live_vendor_calls_enabled": config.LIVE_VENDOR_CALLS_ENABLED,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -94,12 +134,16 @@ def put_spec(job_id: str, body: SpecBody, user: dict = Depends(auth.current_user
     """The web intake form's door — same rules as the voice interview:
     any spec change resets user confirmation."""
     job = _owned_job(job_id, user)
-    job["spec"] = {**job["spec"], **body.spec}
+    from .spec_validation import sanitize_extracted
+    clean, errors = sanitize_extracted(body.spec, _pack(job))
+    if errors:
+        raise HTTPException(422, {"message": "Spec contains invalid fields", "errors": errors})
+    job["spec"] = {**job["spec"], **clean}
     if "form" not in job["spec_source"]:
         job["spec_source"] = (job["spec_source"] + "+form").lstrip("+")
     job["confirmed"] = False
     db.put("jobs", job_id, job)
-    missing = [f for f in _pack(job)["spec_schema"]["required"] if not job["spec"].get(f)]
+    missing = _missing_required(job["spec"], _pack(job))
     return {"job": job, "missing_required_fields": missing}
 
 
@@ -114,8 +158,22 @@ async def upload_document(job_id: str, file: UploadFile, user: dict = Depends(au
     job = _owned_job(job_id, user)
     content = await file.read()
     extracted = parse_document(file.filename, content, _pack(job), job["spec"])
+    from .spec_validation import sanitize_extracted
+    # Parser metadata is kept outside the domain spec; every candidate spec
+    # field is schema-checked before it can influence a confirmed job.
+    metadata = {"insights": extracted.get("insights", [])}
+    clean, validation_errors = sanitize_extracted(
+        {k: v for k, v in extracted.items() if k not in ("insights", "vertical")}, _pack(job))
+    extracted = {**clean, **{k: v for k, v in metadata.items() if v not in (None, "", [], {})}}
 
     doc_id = db.new_id("doc")
+    # Preserve provenance inside every extracted quote. It becomes usable as
+    # leverage only after the user re-confirms the merged specification.
+    document_quotes = extracted.get("existing_quotes") or (
+        [extracted["existing_quote"]] if extracted.get("existing_quote") else [])
+    for quote in document_quotes:
+        quote["_document_id"] = doc_id
+        quote["_document_filename"] = file.filename
     folder = UPLOADS_DIR / job_id
     folder.mkdir(parents=True, exist_ok=True)
     (folder / f"{doc_id}_{file.filename}").write_bytes(content)
@@ -126,7 +184,8 @@ async def upload_document(job_id: str, file: UploadFile, user: dict = Depends(au
            "extracted_fields": filled,
            "updates": updates,   # [{field, from, to}] — the doc corrected these
            "has_quote": bool(extracted.get("existing_quote")),
-           "insights": extracted.get("insights", [])}
+           "insights": extracted.get("insights", []),
+           "validation_errors": validation_errors}
     job.setdefault("documents", []).append(doc)
     if "document" not in job["spec_source"]:
         job["spec_source"] = (job["spec_source"] + "+document").lstrip("+")
@@ -153,6 +212,8 @@ def voice_session(job_id: str, user: dict = Depends(auth.current_user)):
     if not ELEVENLABS_API_KEY:
         raise HTTPException(503, "ELEVENLABS_API_KEY missing — voice is disabled.")
     reg = _json.loads(registry_path().read_text()) if registry_path().exists() else {}
+    if reg.get("meta", {}).get("vertical") != job.get("vertical"):
+        raise HTTPException(503, "Estimator is provisioned for a different domain — set VERTICAL and re-provision.")
     agent_id = reg.get("agents", {}).get("estimator", "")
     if not agent_id:
         raise HTTPException(503, "Estimator agent not provisioned — run `python -m agents.provision`.")
@@ -191,38 +252,63 @@ def seed_simulated_market(job_id: str, user: dict = Depends(auth.current_user)):
 
 
 class FromCallListIn(BaseModel):
-    count: int = 3                  # take the top-N discovered places
+    count: int = 0                  # 0 = every callable Google Places vendor
     companies: list[dict] = []      # or explicit picks: [{name, phone}]
 
 
 @app.post("/api/jobs/{job_id}/companies/from-call-list")
 def companies_from_call_list(job_id: str, body: FromCallListIn,
                              user: dict = Depends(auth.current_user)):
-    """Build the demo market from REAL discovered places WITHOUT ever calling
-    them: each picked business becomes a SYNTHETIC company — real name and
-    phone on the board, behavior played by a simulated counterparty persona
-    (the three negotiation styles, assigned round-robin)."""
-    import json as _json
-    from .config import registry_path
+    """Promote every real Google Places lead into the scheduler.
+
+    With global debug enabled their identity stays real while only the
+    transcript/quote is simulated.  With debug disabled the same record is the
+    actual Twilio destination.  ``count`` remains only for old clients.
+    """
     job = _owned_job(job_id, user)
-    picks = body.companies or job.get("call_list", {}).get("items", [])[:body.count]
+    discovered = [item for item in job.get("call_list", {}).get("items", [])
+                  if "google_places" in item.get("sources", []) and item.get("phone")]
+    if body.companies:
+        # Explicit picks are references to server-discovered leads, never an
+        # arbitrary client-supplied dial list.
+        by_phone = {item["phone"]: item for item in discovered}
+        picks = []
+        for requested in body.companies:
+            actual = by_phone.get(requested.get("phone", ""))
+            if not actual or actual.get("name") != requested.get("name"):
+                raise HTTPException(422, "Every selected company must exactly match a saved Google Places lead.")
+            picks.append(actual)
+    else:
+        picks = discovered
+    if body.count > 0:
+        picks = picks[:body.count]
     if not picks:
-        raise HTTPException(404, "No call list on this job — scan the market first.")
+        raise HTTPException(404, "No callable Google Places vendors on this job — scan the market first.")
+    if not body.companies and body.count == 0:
+        from .callrunner import sync_google_companies
+        created = sync_google_companies(job_id)
+        return {"created": created, "companies": created,
+                "debug_mode": config.DEBUG_CALLS,
+                "note": "All real Google Places vendors are scheduled; debug mode generates labelled transcripts only."
+                if config.DEBUG_CALLS else "All real Google Places vendors are available for outbound calling."}
+
     ps = personas(job.get("vertical"))
-    agents = (_json.loads(registry_path().read_text()).get("agents", {})
-              if registry_path().exists() else {})
-    existing = {c["name"] for c in db.where("companies", job_id=job_id)}
+    existing = {c.get("phone"): c for c in db.where("companies", job_id=job_id)}
     created = []
-    for i, item in enumerate(p for p in picks if p.get("name") and p["name"] not in existing):
+    for i, item in enumerate(p for p in picks if p.get("name") and p.get("phone")):
         p = ps[i % len(ps)]
-        co = Company(id=db.new_id("co"), name=item["name"], phone=item.get("phone", ""),
-                     source="synthetic", persona=p["id"],
-                     agent_id=agents.get(f"counterparty:{p['id']}", ""))
+        old = existing.get(item["phone"], {})
+        co = Company(id=old.get("id") or db.new_id("co"), name=item["name"],
+                     phone=item["phone"], source="google_places", persona=p["id"],
+                     rating=item.get("rating"), review_count=item.get("review_count"),
+                     address=item.get("address", ""),
+                     discovery_sources=item.get("sources", ["google_places"]),
+                     external_ids=item.get("source_ids", {}))
         db.put("companies", co.id, co.model_dump(), job_id=job_id)
-        created.append({"id": co.id, "name": co.name, "style": p["style"]})
-    return {"created": created,
-            "note": "Synthetic demo market: real local businesses by name, behavior "
-                    "SIMULATED by counterparty agents — no real business is ever called."}
+        created.append({"id": co.id, "name": co.name, "style": p["style"],
+                        "source": "google_places"})
+    return {"created": created, "companies": db.where("companies", job_id=job_id),
+            "debug_mode": config.DEBUG_CALLS}
 
 
 @app.get("/api/jobs/{job_id}/call-queue")
@@ -237,7 +323,10 @@ def call_queue(job_id: str, user: dict = Depends(auth.current_user)):
 class StartCallsIn(BaseModel):
     phase: str = "quote"            # quote | negotiate
     company_ids: list[str] = []
-    parallel: bool = False
+    parallel: bool | None = None     # deprecated; server always uses sqrt(n)
+    retry_completed: bool = False
+    recommended_only: bool = False
+    idempotency_key: str = Field(default="", max_length=128)  # retry-safe request id
 
 
 @app.post("/api/jobs/{job_id}/calls/start")
@@ -251,76 +340,62 @@ def start_calls(job_id: str, body: StartCallsIn, user: dict = Depends(auth.curre
         raise HTTPException(409, "Spec not confirmed — confirm it before any call.")
     from . import callrunner
     try:
-        return callrunner.start_calls(job_id, body.phase, body.company_ids or None, body.parallel)
+        return callrunner.start_calls(job_id, body.phase, body.company_ids or None, body.parallel,
+                                      retry_completed=body.retry_completed,
+                                      recommended_only=body.recommended_only,
+                                      idempotency_key=body.idempotency_key or None)
     except RuntimeError as e:
         raise HTTPException(409, str(e))
     except LookupError as e:
         raise HTTPException(404, str(e))
 
 
-class RealCallIn(BaseModel):
-    to_number: str                  # E.164, e.g. +393401234567
+class DemoCallIn(BaseModel):
+    company_id: str
     phase: str = "negotiate"        # quote | negotiate
-    company_name: str = "Live Vendor (phone)"
 
 
-@app.post("/api/jobs/{job_id}/calls/real")
-def real_call(job_id: str, body: RealCallIn, user: dict = Depends(auth.current_user)):
-    """THE live-demo beat: our agent places a REAL phone call (ElevenLabs
-    native Twilio outbound) to a human playing the vendor — the negotiation
-    happens on a real line, tools/webhooks/logging identical to bridge calls."""
-    import os
-    import httpx
-    from datetime import datetime, timezone
-    import json as _json
-    from .config import ELEVENLABS_API_KEY, registry_path
+@app.post("/api/jobs/{job_id}/calls/demo")
+def demo_call(job_id: str, body: DemoCallIn, user: dict = Depends(auth.current_user)):
+    """Call the single server-configured demo phone through the imported
+    Twilio number while preserving the selected Google vendor record.
+
+    This explicit action is the sole exception to global transcript-only debug;
+    bulk scheduling never dials while DEBUG_CALLS=true.
+    """
     job = _owned_job(job_id, user)
     if body.phase not in ("quote", "negotiate"):
         raise HTTPException(422, "phase must be 'quote' or 'negotiate'")
     if not job.get("confirmed"):
         raise HTTPException(409, "Spec not confirmed — confirm it before any call.")
-    phone_id = os.getenv("ELEVENLABS_PHONE_NUMBER_ID", "")
-    if not phone_id:
-        raise HTTPException(503, "ELEVENLABS_PHONE_NUMBER_ID missing — import a Twilio "
-                                 "number in the ElevenLabs dashboard (Phone Numbers), then "
-                                 "put its id in .env and restart.")
-    reg = _json.loads(registry_path().read_text()) if registry_path().exists() else {}
-    agent_id = reg.get("agents", {}).get("caller" if body.phase == "quote" else "closer", "")
-    if not agent_id:
-        raise HTTPException(503, "Agents not provisioned — run `python -m agents.provision`.")
+    from . import callrunner
+    try:
+        return callrunner.start_demo_call(job_id, body.company_id, body.phase)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"ElevenLabs/Twilio demo call failed: {str(exc)[:300]}")
 
-    co = Company(id=db.new_id("co"), name=body.company_name, phone=body.to_number, source="human")
-    db.put("companies", co.id, co.model_dump(), job_id=job_id)
-    call_id = db.new_id("call")
-    db.put("calls", call_id, {"id": call_id, "job_id": job_id, "company_id": co.id,
-                              "kind": body.phase,
-                              "started_at": datetime.now(timezone.utc).isoformat()},
-           job_id=job_id, company_id=co.id)
 
-    r = httpx.post("https://api.elevenlabs.io/v1/convai/twilio/outbound-call",
-                   headers={"xi-api-key": ELEVENLABS_API_KEY},
-                   json={"agent_id": agent_id, "agent_phone_number_id": phone_id,
-                         "to_number": body.to_number,
-                         "conversation_initiation_client_data": {
-                             "dynamic_variables": {"job_id": job_id, "company_id": co.id,
-                                                   "company_name": body.company_name}}},
-                   timeout=30)
-    if r.status_code >= 300:
-        raise HTTPException(502, f"ElevenLabs outbound call failed: {r.status_code} {r.text[:300]}")
-    out = r.json()
-    call = db.get("calls", call_id)
-    call["conversation_id"] = out.get("conversation_id", "")
-    db.put("calls", call_id, call, job_id=job_id, company_id=co.id)
-    return {"dialing": True, "company_id": co.id, "call_id": call_id,
-            "conversation_id": call["conversation_id"], "detail": out}
+@app.get("/api/jobs/{job_id}/follow-ups")
+def follow_ups(job_id: str, user: dict = Depends(auth.current_user)):
+    job = _owned_job(job_id, user)
+    return {"knowledge_version": job.get("knowledge_version", 0),
+            "recommendations": job.get("follow_up_plan", [])}
 
 
 @app.post("/api/jobs/{job_id}/confirm")
 def confirm_spec(job_id: str, user: dict = Depends(auth.current_user)):
     job = _owned_job(job_id, user)
-    missing = [f for f in _pack(job)["spec_schema"]["required"] if not job["spec"].get(f)]
-    if missing:
-        raise HTTPException(422, f"Spec incomplete, cannot confirm. Missing: {missing}")
+    if job.get("spec", {}).get("vertical", job["vertical"]) != job["vertical"]:
+        raise HTTPException(422, "Spec vertical does not match the job vertical")
+    from .spec_validation import validate_spec
+    errors = validate_spec(job["spec"], _pack(job))
+    if errors:
+        raise HTTPException(422, {"message": "Spec is not valid and cannot be confirmed",
+                                  "errors": errors})
     job["confirmed"] = True
     db.put("jobs", job_id, job)
     return job
@@ -396,7 +471,31 @@ def quotes(job_id: str, user: dict = Depends(auth.current_user)):
 @app.get("/api/jobs/{job_id}/calls")
 def calls(job_id: str, user: dict = Depends(auth.current_user)):
     _owned_job(job_id, user)
-    return db.where("calls", job_id=job_id)
+    out = []
+    for call in db.where("calls", job_id=job_id):
+        row = dict(call)
+        row["has_audio"] = bool(row.get("audio_path"))
+        row["audio_url"] = (f"/api/jobs/{job_id}/calls/{row['id']}/audio"
+                            if row["has_audio"] else "")
+        row.pop("audio_path", None)
+        out.append(row)
+    return out
+
+
+@app.get("/api/jobs/{job_id}/calls/{call_id}/audio")
+def call_audio(job_id: str, call_id: str, user: dict = Depends(auth.current_user)):
+    """Authenticated recording playback for Lovable. Debug calls return 404
+    because transcript-only mode intentionally creates no audio artifact."""
+    _owned_job(job_id, user)
+    call = db.get("calls", call_id)
+    if not call or call.get("job_id") != job_id or not call.get("audio_path"):
+        raise HTTPException(404, "No recording exists for this call.")
+    from pathlib import Path
+    path = Path(call["audio_path"]).resolve()
+    root = RECORDINGS_DIR.resolve()
+    if root not in path.parents or not path.is_file():
+        raise HTTPException(404, "Recording not found.")
+    return FileResponse(path, media_type="audio/mpeg", filename=f"{call_id}.mp3")
 
 
 @app.get("/api/jobs/{job_id}/report")
@@ -410,11 +509,13 @@ def report(job_id: str, user: dict = Depends(auth.current_user)):
 # --------------------------------------------------------------------------
 class JobRef(BaseModel):
     job_id: str
+    call_id: str = ""
 
 
 class CompanyRef(BaseModel):
     job_id: str
     company_id: str
+    call_id: str = ""
 
 
 class SpecIn(BaseModel):
@@ -427,7 +528,44 @@ def t_get_job_spec(ref: JobRef):
     job = _job(ref.job_id)
     if not job["confirmed"]:
         raise HTTPException(409, "Job spec not confirmed by the user yet — no calls allowed.")
+    if ref.call_id:
+        call = _call(ref.call_id, ref.job_id)
+        frozen = call.get("knowledge_snapshot", {}).get("spec")
+        if frozen:
+            return {"spec": frozen, "spec_hash": call.get("spec_hash", ""),
+                    "knowledge_version": call.get("knowledge_version", 0)}
     return {"spec": job["spec"]}
+
+
+@app.post("/agent-tools/get_call_context")
+def t_get_call_context(ref: CompanyRef):
+    """Atomic honesty gate: frozen spec, own history and only the competing
+    facts that existed at this batch's start."""
+    job = _job(ref.job_id)
+    if not job.get("confirmed"):
+        raise HTTPException(409, "Job spec not confirmed by the user yet — no calls allowed.")
+    call = _resolve_call(ref.job_id, ref.company_id, ref.call_id)
+    context = call.get("knowledge_snapshot")
+    if not context:
+        from .knowledge import context_for, create_snapshot
+        context = context_for(create_snapshot(ref.job_id, job.get("knowledge_version", 0)),
+                              ref.company_id)
+        call["knowledge_snapshot"] = context
+        call["knowledge_version"] = context.get("knowledge_version", 0)
+        call["spec_hash"] = context.get("spec_hash", "")
+        db.put("calls", call["id"], call, job_id=ref.job_id, company_id=ref.company_id)
+    return {**context, "call_id": call["id"], "company_id": ref.company_id}
+
+
+@app.post("/agent-tools/get_company_history")
+def t_get_company_history(ref: CompanyRef):
+    """The counterparty's grounded memory on a recall. It exposes only that
+    company's own recorded offers, never competitors."""
+    context = t_get_call_context(ref)
+    return {"call_id": context["call_id"],
+            "knowledge_version": context.get("knowledge_version", 0),
+            "own_quote_history": context.get("own_quote_history", []),
+            "rule": "Acknowledge only these prior offers; if empty, say no prior quote is verified."}
 
 
 @app.post("/agent-tools/save_job_spec")
@@ -437,11 +575,18 @@ def t_save_job_spec(body: SpecIn):
     (False/0 are kept — they are real answers)."""
     job = _job(body.job_id)
     incoming = {k: v for k, v in body.spec.items() if v not in (None, "", [], {})}
-    job["spec"] = {**job["spec"], **incoming}
+    declared_vertical = incoming.pop("vertical", job.get("vertical", ""))
+    if declared_vertical != job.get("vertical"):
+        raise HTTPException(422, "Estimator returned a spec for the wrong vertical")
+    from .spec_validation import sanitize_extracted
+    clean, errors = sanitize_extracted(incoming, _pack(job))
+    if errors:
+        raise HTTPException(422, {"message": "Estimator returned an invalid spec", "errors": errors})
+    job["spec"] = {**job["spec"], **clean}
     job["spec_source"] = ("interview+" + job["spec_source"]).rstrip("+") if job["spec_source"] else "interview"
     job["confirmed"] = False  # any spec change requires re-confirmation
     db.put("jobs", body.job_id, job)
-    missing = [f for f in _pack(job)["spec_schema"]["required"] if not job["spec"].get(f)]
+    missing = _missing_required(job["spec"], _pack(job))
     return {"saved": True, "missing_required_fields": missing}
 
 
@@ -454,7 +599,7 @@ def t_get_intake_form(ref: JobRef):
     pack = _pack(job)
     spec = job.get("spec", {})
     on_file = {k: v for k, v in spec.items() if v not in (None, "", [], {})}
-    missing = [f for f in pack["spec_schema"]["required"] if not spec.get(f)]
+    missing = _missing_required(spec, pack)
     return {"base_questions": pack["estimator_questions"],
             "learned_questions": _learned(job["vertical"], job.get("area_code", "")),
             "already_on_file": on_file,
@@ -470,48 +615,70 @@ def t_log_learned_questions(body: LearnedIn):
     """End-of-intake: persist NEW price-relevant questions this call surfaced.
     They join the intake form for every future job in the same (vertical, area),
     and are surfaced to the user on the job record."""
-    from datetime import datetime, timezone
     job = _job(body.job_id)
-    pack = _pack(job)
-    vname, area = job["vertical"], job.get("area_code", "")
-    known = {_norm(r["question"]): r for r in db.where("learned_questions", vertical=vname, area_code=area)}
-    base_norms = {_norm(q) for q in pack["estimator_questions"]}
-
-    added, already_known = [], []
-    for lq in body.questions:
-        n = _norm(lq.question)
-        if not n:
+    if body.call_id:
+        call = _call(body.call_id, body.job_id, body.company_id)
+        if call.get("ended_at"):
+            raise HTTPException(409, "This call is already terminal; late learning writes are rejected")
+    elif body.company_id:
+        if not any(company.get("id") == body.company_id
+                   for company in db.where("companies", job_id=body.job_id)):
+            raise HTTPException(422, "company_id does not belong to this job")
+    from .learnings import persist_questions
+    base = {_norm(q) for q in _pack(job)["estimator_questions"]}
+    aggregate = {"logged": True, "added": [], "updated": [], "already_known": []}
+    for question in body.questions:
+        if _norm(question.question) in base:
+            aggregate["already_known"].append(question.question)
             continue
-        if n in base_norms:
-            already_known.append(lq.question)
-            continue
-        if n in known:
-            row = known[n]
-            row["times_seen"] = row.get("times_seen", 1) + 1
-            db.put("learned_questions", row["id"], row, vertical=vname, area_code=area)
-            already_known.append(lq.question)
-            continue
-        row = {"id": db.new_id("lq"), "vertical": vname, "area_code": area,
-               "question": lq.question.strip(), "why_it_matters": lq.why_it_matters.strip(),
-               "source_job_id": job["id"], "times_seen": 1, "status": "active",
-               "created_at": datetime.now(timezone.utc).isoformat()}
-        db.put("learned_questions", row["id"], row, vertical=vname, area_code=area)
-        known[n] = row
-        added.append({"question": row["question"], "why_it_matters": row["why_it_matters"]})
-
-    if added:  # surface to the user on the job itself
-        job["discovered_questions"] = job.get("discovered_questions", []) + added
-        db.put("jobs", job["id"], job)
-    return {"logged": True, "added": added, "already_known": already_known}
+        result = persist_questions(job, [question], source_call_id=body.call_id,
+                                   company_id=body.company_id)
+        for key in ("added", "updated", "already_known"):
+            aggregate[key].extend(result.get(key, []))
+    return aggregate
 
 
 @app.post("/agent-tools/log_quote")
 def t_log_quote(q: QuoteIn):
     job = _job(q.job_id)
+    company = db.get("companies", q.company_id)
+    if not company or company not in db.where("companies", job_id=q.job_id):
+        raise HTTPException(422, "company_id does not belong to this job")
+    call = _resolve_call(q.job_id, q.company_id, q.call_id, required=False)
+    if q.call_id and not call:
+        raise HTTPException(404, "call_id not found for this job+company")
+    if call and call.get("ended_at"):
+        raise HTTPException(409, "This call is already terminal; late quote writes are rejected")
+    if call:
+        expected_phase = "initial" if call.get("kind") == "quote" else "negotiated"
+        if q.phase != expected_phase:
+            raise HTTPException(422, f"phase={q.phase} is incompatible with a {call.get('kind')} call")
+    if q.phase == "negotiated" and q.leverage_quote_ids and call:
+        allowed = {row["quote_id"] for row in call.get("knowledge_snapshot", {}).get(
+            "allowed_competitive_claims", [])}
+        invalid = set(q.leverage_quote_ids) - allowed
+        if invalid:
+            raise HTTPException(422, f"Ungrounded leverage quote ids: {sorted(invalid)}")
+    allowed_codes = set(_pack(job).get("fee_taxonomy", {})) | {"other"}
+    invalid_codes = sorted({item.code for item in q.line_items if item.code not in allowed_codes})
+    if invalid_codes:
+        raise HTTPException(422, f"Unknown fee taxonomy codes: {invalid_codes}")
     data = q.model_dump()
-    data["red_flags"] = evaluate_red_flags(q, job["spec"], _pack(job))
+    frozen_spec = (call or {}).get("knowledge_snapshot", {}).get("spec", job["spec"])
+    data["red_flags"] = evaluate_red_flags(q, frozen_spec, _pack(job))
+    itemized_total = round(sum(item.amount for item in q.line_items), 2)
+    data["itemization_delta"] = round(q.total - itemized_total, 2)
+    data["itemization_verified"] = abs(data["itemization_delta"]) <= 1.0
+    if not data["itemization_verified"]:
+        data.setdefault("validation_warnings", []).append(
+            f"Line items sum to {itemized_total}, not the stated total {q.total}.")
     data["id"] = db.new_id("quote")
-    data["conversation_id"] = _latest_call_field(q.job_id, q.company_id, "conversation_id")
+    data["call_id"] = (call or {}).get("id", q.call_id)
+    data["conversation_id"] = (call or {}).get("conversation_id", "")
+    data["batch_id"] = (call or {}).get("batch_id", "")
+    data["knowledge_version"] = (call or {}).get("knowledge_version", 0)
+    data["evidence_verified"] = False  # post-call finalizer checks transcript verbatim
+    data["uncorrelated"] = call is None
     from datetime import datetime, timezone
     data["created_at"] = datetime.now(timezone.utc).isoformat()
     db.put("quotes", data["id"], data, job_id=q.job_id, company_id=q.company_id, phase=q.phase)
@@ -520,41 +687,49 @@ def t_log_quote(q: QuoteIn):
 
 @app.post("/agent-tools/log_call_outcome")
 def t_log_outcome(o: OutcomeIn):
-    call = _latest_call(o.job_id, o.company_id)
+    call = _resolve_call(o.job_id, o.company_id, o.call_id, required=False)
     if call is None:
         raise HTTPException(404, "No active call record for this job+company.")
-    call.update(o.model_dump(exclude={"job_id", "company_id"}))
+    if call.get("ended_at"):
+        raise HTTPException(409, "This call is already terminal; duplicate outcome rejected")
+    if o.outcome == "quote":
+        has_quote = any(q.get("call_id") == call["id"] for q in
+                        db.where("quotes", job_id=o.job_id, company_id=o.company_id))
+        if not has_quote:
+            raise HTTPException(409, "outcome=quote requires a structured quote on this call")
+    if o.outcome == "callback" and not o.callback_time.strip():
+        raise HTTPException(422, "callback_time is required for outcome=callback")
+    if o.outcome == "decline" and not o.decline_reason.strip():
+        raise HTTPException(422, "decline_reason is required for outcome=decline")
+    call.update(o.model_dump(exclude={"job_id", "company_id", "call_id"}))
     db.put("calls", call["id"], call, job_id=o.job_id, company_id=o.company_id)
     return {"logged": True}
 
 
 @app.post("/agent-tools/get_competing_quotes")
 def t_competing_quotes(ref: CompanyRef):
-    """THE honesty gate: the only source of competitive leverage that exists."""
-    out = []
-    for q in db.where("quotes", job_id=ref.job_id):
-        if q["company_id"] == ref.company_id:
-            continue
-        co = db.get("companies", q["company_id"]) or {}
-        out.append({"company": co.get("name", "?"), "total": q["total"], "binding": q["binding"],
-                    "phase": q["phase"],
-                    "line_items": [{"label": li["label"], "amount": li["amount"]} for li in q["line_items"]]})
-    spec = _job(ref.job_id)["spec"]
-    doc_quotes = list(spec.get("existing_quotes") or [])
-    if spec.get("existing_quote"):  # legacy single-quote key
-        doc_quotes.append(spec["existing_quote"])
-    for eq in doc_quotes:  # from document intake: leverage the user already had
-        if eq.get("total"):
-            out.append({"company": eq.get("company", "prior written quote"), "total": eq.get("total"),
-                        "binding": True, "phase": "document",
-                        "line_items": eq.get("line_items", [])})
-    return {"competing_quotes": out,
-            "rules": "Cite ONLY these, with exact company names and figures. If empty, you have no competing bids and must not imply otherwise."}
+    """Backward-compatible view over the frozen atomic call context."""
+    call = _resolve_call(ref.job_id, ref.company_id, ref.call_id, required=False)
+    if call and (ref.call_id or not call.get("ended_at")):
+        context = call.get("knowledge_snapshot", {})
+    else:  # offline/legacy inspection outside a running call
+        from .knowledge import context_for, create_snapshot
+        job = _job(ref.job_id)
+        context = context_for(create_snapshot(ref.job_id, job.get("knowledge_version", 0)),
+                              ref.company_id)
+    return {"competing_quotes": context.get("competing_quotes", []),
+            "knowledge_version": context.get("knowledge_version", 0),
+            "rules": context.get("rules", "Cite only returned quotes.")}
 
 
 @app.post("/agent-tools/get_benchmark")
 def t_benchmark(ref: JobRef):
     job = _job(ref.job_id)
+    if ref.call_id:
+        call = _call(ref.call_id, ref.job_id)
+        benchmark = call.get("knowledge_snapshot", {}).get("benchmark")
+        if benchmark:
+            return benchmark
     return market_range(job["spec"], _pack(job))
 
 
@@ -566,7 +741,9 @@ def t_counterparty_pricing(ref: CompanyRef):
         raise HTTPException(404, "Not a simulated company.")
     job = _job(ref.job_id)
     persona = next(p for p in personas(job.get("vertical")) if p["id"] == co["persona"])
-    return counterparty_pricing(persona, job["spec"], _pack(job))
+    call = _resolve_call(ref.job_id, ref.company_id, ref.call_id, required=False)
+    frozen_spec = (call or {}).get("knowledge_snapshot", {}).get("spec", job["spec"])
+    return counterparty_pricing(persona, frozen_spec, _pack(job))
 
 
 # --------------------------------------------------------------------------
@@ -575,6 +752,32 @@ def _job(job_id: str) -> dict:
     if not job:
         raise HTTPException(404, "job not found")
     return job
+
+
+def _call(call_id: str, job_id: str = "", company_id: str = "") -> dict:
+    call = db.get("calls", call_id)
+    if not call or (job_id and call.get("job_id") != job_id) \
+            or (company_id and call.get("company_id") != company_id):
+        raise HTTPException(404, "call not found")
+    return call
+
+
+def _resolve_call(job_id: str, company_id: str, call_id: str = "",
+                  required: bool = True) -> dict | None:
+    if call_id:
+        try:
+            return _call(call_id, job_id, company_id)
+        except HTTPException:
+            if required:
+                raise
+            return None
+    rows = db.where("calls", job_id=job_id, company_id=company_id)
+    active = [row for row in rows if not row.get("ended_at")]
+    found = _latest_call(job_id, company_id) if not active else sorted(
+        active, key=lambda c: c.get("created_at") or c.get("started_at", ""))[-1]
+    if not found and required:
+        raise HTTPException(404, "No call record for this job+company")
+    return found
 
 
 def _owned_job(job_id: str, user: dict) -> dict:
@@ -647,6 +850,14 @@ def _norm(q: str) -> str:
     return " ".join(q.lower().split()).strip(" ?.!,;:")
 
 
+def _missing_required(spec: dict, pack: dict) -> list[str]:
+    def missing(value):
+        return value is None or (isinstance(value, str) and not value.strip()) \
+            or (isinstance(value, (list, dict)) and not value)
+    return [field for field in pack["spec_schema"]["required"]
+            if field not in spec or missing(spec[field])]
+
+
 def _learned(vertical_name: str, area_code: str) -> list[dict]:
     rows = [r for r in db.where("learned_questions", vertical=vertical_name, area_code=area_code)
             if r.get("status", "active") == "active"]
@@ -657,7 +868,7 @@ def _learned(vertical_name: str, area_code: str) -> list[dict]:
 
 def _latest_call(job_id: str, company_id: str) -> dict | None:
     rows = db.where("calls", job_id=job_id, company_id=company_id)
-    return sorted(rows, key=lambda c: c.get("started_at", ""))[-1] if rows else None
+    return sorted(rows, key=lambda c: c.get("created_at") or c.get("started_at", ""))[-1] if rows else None
 
 
 def _latest_call_field(job_id: str, company_id: str, field: str) -> str:

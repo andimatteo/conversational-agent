@@ -14,15 +14,18 @@ import tempfile
 # Isolate ALL storage (DB, uploads) in a throwaway dir — tests must never
 # pollute the real data/negotiator.db (learned questions, jobs, users).
 os.environ.setdefault("NEGOTIATOR_DATA_DIR", tempfile.mkdtemp(prefix="negotiator-test-"))
+os.environ.setdefault("AGENT_TOOL_SECRET", "offline-test-tool-secret")
 import uuid
 
 from fastapi.testclient import TestClient
 
 from negotiator.benchmarks import market_range
+from negotiator.config import AGENT_TOOL_SECRET
 from negotiator.packs import list_packs, load_pack, validate_pack
 from negotiator.server import app
 
 c = TestClient(app)
+TOOL_H = {"X-QuoteWise-Tool-Key": AGENT_TOOL_SECRET}
 
 
 def _auth() -> dict:
@@ -73,37 +76,43 @@ def main():
     form = c.get("/api/intake-form", params={"vertical": "plumbing"}).json()
     assert form["base_questions"] == plumbing["estimator_questions"]
     assert form["area_code"] == "28202" and "spec_schema" in form
-    r = c.post("/agent-tools/get_intake_form", json={"job_id": job["id"]})
+    r = c.post("/agent-tools/get_intake_form", headers=TOOL_H, json={"job_id": job["id"]})
     assert r.json()["base_questions"] == plumbing["estimator_questions"]
     print(f"intake form: {len(form['base_questions'])} base + {len(form['learned_questions'])} learned")
 
     # --- estimator saves partial spec -> missing fields, no confirmation ----
     partial = {k: v for k, v in PLUMBING_SPEC.items() if k not in ("urgency", "access")}
-    r = c.post("/agent-tools/save_job_spec", json={"job_id": job["id"], "spec": partial}).json()
+    r = c.post("/agent-tools/save_job_spec", headers=TOOL_H,
+               json={"job_id": job["id"], "spec": partial}).json()
     assert set(r["missing_required_fields"]) == {"urgency", "access"}
-    assert c.post("/agent-tools/get_job_spec", json={"job_id": job["id"]}).status_code == 409
+    assert c.post("/agent-tools/get_job_spec", headers=TOOL_H,
+                  json={"job_id": job["id"]}).status_code == 409
 
     # the interview only asks what's missing: the form tool exposes what's on file
-    r = c.post("/agent-tools/get_intake_form", json={"job_id": job["id"]}).json()
+    r = c.post("/agent-tools/get_intake_form", headers=TOOL_H,
+               json={"job_id": job["id"]}).json()
     assert set(r["missing_required_fields"]) == {"urgency", "access"}
     assert r["already_on_file"]["job_type"] == "water_heater"
     print("ask-only-missing OK: form tool reports already_on_file + missing fields")
 
-    r = c.post("/agent-tools/save_job_spec", json={"job_id": job["id"], "spec": PLUMBING_SPEC}).json()
+    r = c.post("/agent-tools/save_job_spec", headers=TOOL_H,
+               json={"job_id": job["id"], "spec": PLUMBING_SPEC}).json()
     assert r["missing_required_fields"] == []
     # a later partial save can never wipe known fields with empties (False is a real answer)
-    c.post("/agent-tools/save_job_spec",
+    c.post("/agent-tools/save_job_spec", headers=TOOL_H,
            json={"job_id": job["id"], "spec": {"pipe_material": "", "water_shutoff_known": False}})
     spec_now = c.get(f"/api/jobs/{job['id']}", headers=h).json()["spec"]
     assert spec_now["pipe_material"] == "copper" and spec_now["water_shutoff_known"] is False
     print("no-clobber OK: empty values dropped on save, False/0 kept")
 
     c.post(f"/api/jobs/{job['id']}/confirm", headers=h).raise_for_status()
-    assert c.post("/agent-tools/get_job_spec", json={"job_id": job["id"]}).status_code == 200
+    assert c.post("/agent-tools/get_job_spec", headers=TOOL_H,
+                  json={"job_id": job["id"]}).status_code == 200
     print("spec guard OK: 409 until saved complete + user-confirmed")
 
     # --- generic rate-card benchmark + modifiers ----------------------------
-    bench = c.post("/agent-tools/get_benchmark", json={"job_id": job["id"]}).json()
+    bench = c.post("/agent-tools/get_benchmark", headers=TOOL_H,
+                   json={"job_id": job["id"]}).json()
     # water_heater: 90 + 4h*125 + 950 = 1540, then within_24h/old-building/tight-access modifiers
     assert bench["base_estimate"] == round(1540 * 1.15 * 1.15 * 1.10, 2), bench
     emergency = market_range({**PLUMBING_SPEC, "urgency": "emergency"}, plumbing)
@@ -115,7 +124,7 @@ def main():
     tag = uuid.uuid4().hex[:6]
     qa = f"Is the water heater in a code-compliant drain pan? [{tag}]"
     qb = f"Does the HOA require a licensed contractor certificate? [{tag}]"
-    r = c.post("/agent-tools/log_learned_questions", json={
+    r = c.post("/agent-tools/log_learned_questions", headers=TOOL_H, json={
         "job_id": job["id"],
         "questions": [{"question": qa, "why_it_matters": "Pan + expansion tank add $150-$300"},
                       {"question": f"  {qa.upper()} "},  # same question, messier phrasing
@@ -127,11 +136,12 @@ def main():
     # surfaced to the user on the job record
     assert [q["question"] for q in c.get(f"/api/jobs/{job['id']}", headers=h).json()["discovered_questions"]] == [qa, qb]
     # a NEW job in the same area now gets them in its form; times_seen dedupe works
-    r = c.post("/agent-tools/log_learned_questions",
+    r = c.post("/agent-tools/log_learned_questions", headers=TOOL_H,
                json={"job_id": job["id"], "questions": [{"question": qa}]}).json()
     assert r["added"] == []
     job2 = c.post("/api/jobs", json={"vertical": "plumbing"}, headers=h).json()
-    form2 = c.post("/agent-tools/get_intake_form", json={"job_id": job2["id"]}).json()
+    form2 = c.post("/agent-tools/get_intake_form", headers=TOOL_H,
+                   json={"job_id": job2["id"]}).json()
     learned = {q["question"]: q for q in form2["learned_questions"]}
     # times_seen: initial add (1) + messy duplicate in call 1 (+1) + call 2 (+1)
     assert qa in learned and qb in learned and learned[qa]["times_seen"] == 3
@@ -145,7 +155,7 @@ def main():
     co = {"id": "co_test_" + tag, "name": "Drainz4Less", "persona": "", "source": "manual"}
     from negotiator import db
     db.put("companies", co["id"], co, job_id=job["id"])
-    r = c.post("/agent-tools/log_quote", json={
+    r = c.post("/agent-tools/log_quote", headers=TOOL_H, json={
         "job_id": job["id"], "company_id": co["id"], "phase": "initial",
         "total": round(bench["median"] * 0.5), "binding": False,
         "line_items": [{"label": "all-in", "code": "base", "amount": round(bench["median"] * 0.5),

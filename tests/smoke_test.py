@@ -13,16 +13,21 @@ import tempfile
 # Isolate ALL storage (DB, uploads) in a throwaway dir — tests must never
 # pollute the real data/negotiator.db (learned questions, jobs, users).
 os.environ.setdefault("NEGOTIATOR_DATA_DIR", tempfile.mkdtemp(prefix="negotiator-test-"))
+os.environ.setdefault("AGENT_TOOL_SECRET", "offline-test-tool-secret")
 from fastapi.testclient import TestClient
 
 from negotiator import db
+from negotiator.config import AGENT_TOOL_SECRET
 from negotiator.benchmarks import market_range
 from negotiator.packs import load_pack
 from negotiator.seed import SAMPLE_SPEC
 from negotiator.models import Company, Job
 from negotiator.server import app
+from negotiator.knowledge import context_for, create_snapshot
+from simulation.run_calls import _finalize_call
 
 c = TestClient(app)
+TOOL_H = {"X-QuoteWise-Tool-Key": AGENT_TOOL_SECRET}
 
 
 def li(label, code, amount, kind="fee"):
@@ -54,14 +59,14 @@ def main():
     print(f"benchmark: {bench}")
 
     # --- guard: no calls before user confirmation --------------------------
-    r = c.post("/agent-tools/get_job_spec", json={"job_id": job.id})
+    r = c.post("/agent-tools/get_job_spec", headers=TOOL_H, json={"job_id": job.id})
     assert r.status_code == 409, "spec guard failed — calls possible before confirmation!"
     c.post(f"/api/jobs/{job.id}/confirm", headers=h).raise_for_status()
-    assert c.post("/agent-tools/get_job_spec", json={"job_id": job.id}).status_code == 200
+    assert c.post("/agent-tools/get_job_spec", headers=TOOL_H, json={"job_id": job.id}).status_code == 200
     print("guard OK: calls locked until spec confirmed")
 
     # --- counterparty back office serves hidden ground truth ---------------
-    r = c.post("/agent-tools/counterparty_pricing",
+    r = c.post("/agent-tools/counterparty_pricing", headers=TOOL_H,
                json={"job_id": job.id, "company_id": cos["lowballer"]})
     pricing = r.json()
     assert pricing["list_price"] < bench["red_flag_floor"], "lowballer anchor should trip the red flag"
@@ -86,17 +91,37 @@ def main():
                                      li("premium insurance", "insurance", round(med * 0.20), "addon")],
                          verbatim_evidence="With White Glove you're at twenty-nine hundred, today only."),
     }
+    frozen_initial = create_snapshot(job.id, 0)
     for pid, q in quotes.items():
-        r = c.post("/agent-tools/log_quote", json={"job_id": job.id, "company_id": cos[pid],
-                                                   "phase": "initial", **q})
+        q["verbatim_evidence"] = (
+            f"Our all-in total is ${q['total']:,.0f}, with a ${q['deposit']:,.0f} deposit."
+        )
+        call_id = f"call_initial_{pid}"
+        db.put("calls", call_id, {
+            "id": call_id, "job_id": job.id, "company_id": cos[pid],
+            "kind": "quote", "status": "calling",
+            "knowledge_snapshot": context_for(frozen_initial, cos[pid]),
+            "created_at": "2026-07-18T20:00:00Z",
+        }, job_id=job.id, company_id=cos[pid])
+        r = c.post("/agent-tools/log_quote", headers=TOOL_H, json={"job_id": job.id, "company_id": cos[pid],
+                                                   "call_id": call_id, "phase": "initial", **q})
         r.raise_for_status()
         flags = [f["id"] for f in r.json()["red_flags"]]
         print(f"{pid}: ${q['total']} -> flags {flags}")
         if pid == "lowballer":
             assert {"too_low", "non_binding", "big_deposit", "no_itemization", "pressure_expiry"} <= set(flags)
+        call = db.get("calls", call_id)
+        call.update({"outcome": "quote", "transcript": [
+            {"role": "vendor", "text": q["verbatim_evidence"]},
+            {"role": "vendor", "text": "The itemised amounts are " + ", ".join(
+                f"${abs(item['amount']):,.0f}" for item in q["line_items"]
+            ) + "."},
+        ]})
+        db.put("calls", call_id, call, job_id=job.id, company_id=cos[pid])
+        _finalize_call(call_id, job.id, cos[pid], "")
 
     # --- honesty gate: leverage = exactly the DB ---------------------------
-    r = c.post("/agent-tools/get_competing_quotes",
+    r = c.post("/agent-tools/get_competing_quotes", headers=TOOL_H,
                json={"job_id": job.id, "company_id": cos["upseller"]})
     names = [q["company"] for q in r.json()["competing_quotes"]]
     assert "Summit & Sons Moving" in names and "Premier Coast Van Lines" not in names
@@ -105,13 +130,37 @@ def main():
     # --- Closer: upseller price-matches Summit -5% -------------------------
     summit = quotes["stonewaller"]["total"]
     matched = round(summit * 0.95)
-    c.post("/agent-tools/log_quote", json={
-        "job_id": job.id, "company_id": cos["upseller"], "phase": "negotiated",
+    summit_quote = next(q for q in db.where("quotes", job_id=job.id,
+                                             company_id=cos["stonewaller"])
+                        if q["phase"] == "initial")
+    negotiation_call = "call_negotiate_upseller"
+    db.put("calls", negotiation_call, {
+        "id": negotiation_call, "job_id": job.id, "company_id": cos["upseller"],
+        "kind": "negotiate", "status": "calling",
+        "knowledge_snapshot": context_for(create_snapshot(job.id, 1), cos["upseller"]),
+        "created_at": "2026-07-18T21:00:00Z",
+    }, job_id=job.id, company_id=cos["upseller"])
+    concession = quotes["upseller"]["total"] - matched
+    concession_evidence = (
+        f"From our prior ${quotes['upseller']['total']:,.0f}, I will reduce it by "
+        f"${concession:,.0f} to ${matched:,.0f}, binding, with a $100 deposit."
+    )
+    c.post("/agent-tools/log_quote", headers=TOOL_H, json={
+        "job_id": job.id, "company_id": cos["upseller"], "call_id": negotiation_call,
+        "phase": "negotiated", "negotiation_basis": "competing_quote",
+        "leverage_quote_ids": [summit_quote["id"]],
         "total": matched, "binding": True, "deposit": 100,
-        "line_items": [li("labor+truck, add-ons removed", "base", matched, "base"),
-                       li("price match vs Summit & Sons", "other", -(quotes["upseller"]["total"] - matched), "discount")],
-        "verbatim_evidence": "Fine — I'll do seventeen-sixty-five, binding, because we want the business.",
+        "line_items": [li("previous white-glove total", "base", quotes["upseller"]["total"], "base"),
+                       li("price match vs Summit & Sons", "other", -concession, "discount")],
+        "verbatim_evidence": concession_evidence,
     }).raise_for_status()
+    call = db.get("calls", negotiation_call)
+    call.update({"outcome": "quote", "transcript": [
+        {"role": "agent", "text": f"I have a recorded quote from Summit & Sons Moving for ${summit:,.0f}."},
+        {"role": "vendor", "text": concession_evidence},
+    ]})
+    db.put("calls", negotiation_call, call, job_id=job.id, company_id=cos["upseller"])
+    _finalize_call(negotiation_call, job.id, cos["upseller"], "")
 
     # --- report ------------------------------------------------------------
     rep = c.get(f"/api/jobs/{job.id}/report", headers=h).json()

@@ -1,8 +1,8 @@
 """Offline test for users + per-user job isolation — no API keys needed.
 
 Each user sees ONLY their own profile and jobs: someone else's job answers
-404 everywhere, lists never leak, and agent-tools webhooks stay open for
-the machine side (ElevenLabs).
+404 everywhere, lists never leak, and agent-tools webhooks require the
+machine credential used by ElevenLabs.
 
   .venv/bin/python -m tests.auth_test
 """
@@ -13,10 +13,12 @@ import tempfile
 # Isolate ALL storage (DB, uploads) in a throwaway dir — tests must never
 # pollute the real data/negotiator.db (learned questions, jobs, users).
 os.environ.setdefault("NEGOTIATOR_DATA_DIR", tempfile.mkdtemp(prefix="negotiator-test-"))
+os.environ.setdefault("AGENT_TOOL_SECRET", "offline-test-tool-secret")
 import uuid
 
 from fastapi.testclient import TestClient
 
+from negotiator.config import AGENT_TOOL_SECRET
 from negotiator.server import app
 
 c = TestClient(app)
@@ -81,10 +83,14 @@ def main():
     assert c.get("/api/me", headers=ha).status_code == 401
     print("logout OK: token revoked")
 
-    # --- agent-tools webhooks stay machine-to-machine (no user auth) ---------
+    # --- agent tools reject browsers and accept the provisioned machine key --
     r = c.post("/agent-tools/get_intake_form", json={"job_id": job_b["id"]})
-    assert r.status_code == 200, "agent webhooks must not require user tokens"
-    print("agent-tools OK: still open for ElevenLabs")
+    assert r.status_code == 401
+    r = c.post("/agent-tools/get_intake_form",
+               headers={"X-QuoteWise-Tool-Key": AGENT_TOOL_SECRET},
+               json={"job_id": job_b["id"]})
+    assert r.status_code == 200, "provisioned ElevenLabs tool key must be accepted"
+    print("agent-tools OK: machine key required; browser/user tokens are insufficient")
 
     print("\nAUTH TEST PASSED")
 

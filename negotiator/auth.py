@@ -1,7 +1,8 @@
 """Users + bearer-token auth. Hackathon-grade but real: salted PBKDF2
 password hashes, opaque session tokens in SQLite, a FastAPI dependency
 that resolves the caller. Every /api job route is scoped to its owner;
-/agent-tools/* stays machine-to-machine (ElevenLabs calls it, not users).
+/agent-tools/* is protected by a separate machine secret attached by the
+ElevenLabs provisioner (browser bearer tokens are deliberately insufficient).
 """
 import hashlib
 import secrets
