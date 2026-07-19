@@ -83,6 +83,18 @@ def main():
     assert result["required_sources"] == ["google_places", "yelp", "openstreetmap"]
     assert result["complete"] is False
     assert result["provider_status"]["openstreetmap"]["status"] == "error"
+    live_google = DiscoveryService([
+        FakeProvider("google_places", [
+            Business("Mapped Plumber", "+1 704 555 0188", "google_places", "g-map",
+                     state="NC", latitude=35.2271, longitude=-80.8431),
+        ])
+    ], FakeGeocoder()).discover_google_places(
+        "plumbing company", "North Carolina", 25
+    )
+    assert live_google["discovery_mode"] == "live_google_places_at_launch"
+    assert live_google["provider_status"]["google_places"]["live_api"] is True
+    assert live_google["required_sources"] == ["google_places"]
+    assert live_google["items"][0]["latitude"] == 35.2271
     try:
         DiscoveryService([
             FakeProvider("google_places"), FakeProvider("yelp")

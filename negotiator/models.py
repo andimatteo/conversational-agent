@@ -84,6 +84,10 @@ class Company(BaseModel):
     rating: Optional[float] = None
     review_count: Optional[int] = None
     address: str = ""
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    url: str = ""
+    categories: list[str] = []
     discovery_sources: list[str] = []
     external_ids: dict[str, str] = {}
     # Optional presentation metadata for the explicit allow-listed role-play

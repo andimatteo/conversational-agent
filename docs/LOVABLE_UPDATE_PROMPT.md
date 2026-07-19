@@ -1,5 +1,8 @@
 # Lovable UPDATE prompt — for the already-generated QuoteWise app
 
+> **Superseded:** this file contains the retired Call List page. Use
+> `docs/LOVABLE_DEMO_COMPLETE_PROMPT.md`.
+
 How to use: paste everything below the `---` into the EXISTING Lovable project's
 chat as ONE message, **attaching `assets/logo.png`** to it. It updates the app in
 place; the full from-scratch spec stays in `LOVABLE_PROMPT.md`.

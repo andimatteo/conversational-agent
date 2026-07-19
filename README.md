@@ -23,13 +23,15 @@ available by phone. A customer creates a job, uploads a PDF, image, quote or inv
 and completes a short browser voice interview. Both inputs merge into one structured
 specification; the customer must review and confirm it before telephony is unlocked.
 
-The application then discovers local businesses, promotes every callable Google Places
+After the final review, one launch request performs a fresh Google Places API search,
+promotes every callable Places result,
 lead, gathers comparable itemised quotes, learns new price-sensitive questions from each
 conversation, and plans evidence-backed follow-ups. The Calls workspace shows progressive
 transcripts, current best offer, observed range, called/total, batch barriers and knowledge
 versions. The Compare workspace ranks offers using price, binding status, itemisation and
-red flags, with direct links to transcript passages and recordings. A final Closer call can
-use genuine competing evidence to negotiate price, fees or terms.
+red flags, with direct links to transcript passages and recordings. Compare also renders
+every geolocated offer on a price-pin map and marks the backend recommendation with a
+star. A final Closer call can use genuine competing evidence to negotiate price, fees or terms.
 
 The MVP is configured for residential plumbing, including a resettable water-heater demo.
 The engine itself is domain-independent: changing the vertical YAML replaces the job schema,
@@ -40,7 +42,7 @@ without rewriting the agents or scheduler.
 
 | Layer | Technology | Responsibility |
 |---|---|---|
-| Web product | Lovable-generated React + TypeScript | Authenticated Intake, Spec, Call List, Calls and Compare workspaces; realtime polling and protected audio playback |
+| Web product | Lovable-generated React + TypeScript | Authenticated Intake, Spec, Calls and Compare workspaces; realtime polling, price-pin map and protected audio playback |
 | API and orchestration | Python, FastAPI, Pydantic, Uvicorn | Product API, validation, agent tools, background campaigns, safety gates and provider reconciliation |
 | Voice agents | ElevenLabs Agents Platform | Estimator, Caller and Closer conversations, dynamic variables, tool calls, transcripts and recordings |
 | Telephony | Twilio number imported into ElevenLabs | Outbound live voice transport for authorized real calls and the allow-listed human demo |
@@ -57,7 +59,7 @@ Documents ──► OpenAI parser ─┐
                              ├─► validated spec ─► user confirmation
 Voice intake ─► Estimator ───┘                         │
                                                       ▼
-Google Places ─► normalized vendor list ─► sqrt(n) quote batches
+Final review ─► live Google Places API ─► normalized vendors ─► sqrt(n) quote batches
                                               │
                     frozen knowledge vN ◄─────┤ each agent retrieves:
                                               │ spec + benchmark + own history
@@ -149,7 +151,7 @@ scale portion of the demo.
 | Path | Destination | Transcript | Audio | Purpose |
 |---|---|---|---|---|
 | Bulk `/calls/start`, debug on | No phone call | Explicitly labelled synthetic | None | Safely exercise every real Google vendor identity, batching, quotes, learning, and follow-ups |
-| Prepared hybrid demo `/calls/start` | Only the allow-listed human, twice; every Google phone remains untouched | N-1 labelled synthetic + two live role-play transcripts | Live role-play recordings when available | Explore in quote batch 1, then automatically negotiate after all quote barriers |
+| Prepared demo `/launch` | Fresh live Places discovery, then only the allow-listed human is called twice; every Google phone remains untouched | N-1 labelled synthetic + two live role-play transcripts | Live role-play recordings when available | One reviewed action discovers, starts batch 1 exploration, then automatically negotiates after all barriers |
 | Bulk `/calls/start`, debug off | Each vendor's Google phone number | ElevenLabs voice transcript | Recording when available | Real authorized market calling only |
 | Legacy manual `/calls/demo` | Same server-side `DEMO_PHONE_NUMBER` | ElevenLabs voice transcript | Recording when available | Explicit non-campaign rehearsal only |
 
@@ -159,8 +161,9 @@ real discovery record; only the transcript and structured result are generated.
 `GET /api/runtime-config` is the backend-authoritative source for the UI mode banner.
 
 An explicitly prepared role-play job is the narrow exception while debug is enabled.
-Its all-vendor quote run routes exactly one preselected Google identity to the
-allow-listed `DEMO_PHONE_NUMBER` in quote batch one; every other row remains
+After review, `/launch` performs a new Google Places request, promotes every callable
+result and associates one identity with the allow-listed `DEMO_PHONE_NUMBER` in quote
+batch one; every other row remains
 transcript-only. The selected company's stored name, Google phone and Place ID are not
 changed, and the opening disclosure states that the consenting human does not represent
 that business. After all quote barriers, the same run automatically calls the human back
@@ -213,10 +216,14 @@ ngrok http 8000
 python -m agents.provision
 ```
 
-## Transcript-only end-to-end run
+## Low-level transcript-only API run
 
 All product endpoints require `Authorization: Bearer <token>` unless documented
 otherwise.
+
+These compatibility endpoints remain useful for ordinary jobs and diagnostics; the
+prepared demo UI intentionally removes the Call List page and uses the atomic `/launch`
+flow documented below.
 
 1. Create a job, complete voice/document intake, and confirm the spec.
 2. Discover the market with `POST /api/jobs/{job_id}/call-list/discover`.
@@ -267,14 +274,16 @@ python -m negotiator.demo_reset --live-vendor "Exact Google vendor name"
 
 The command archives prior demo jobs only after the replacement is ready, preserves
 their calls, quotes, batches, claims, recalls, recordings and uploads, and never starts
-a call. Start the integrated all-vendor quote run:
+a call or performs discovery. The Spec review sends one atomic launch request:
 
 ```http
-POST /api/jobs/{job_id}/calls/start
-{"phase":"quote","idempotency_key":"fresh-uuid","authorize_demo_calls":true}
+POST /api/jobs/{job_id}/launch
+{"idempotency_key":"fresh-uuid","authorize_demo_calls":true}
 ```
 
-For ten vendors the quote phase is 4/4/2: the selected human is in batch one and
+The endpoint calls Google Places live, promotes every callable result, selects the
+role-play identity and immediately starts the campaign. For ten vendors the quote
+phase is 4/4/2: the selected human is in batch one and
 nine rows are synthetic transcript-only. A final single-company batch is appended
 automatically for the grounded callback after every quote barrier.
 

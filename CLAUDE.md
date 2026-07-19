@@ -19,10 +19,10 @@ Decisions current as of 2026-07-19:
   ElevenLabs conversation, counter-agent, or audio.
 - `DEBUG_CALLS=false` is still not authority to dial real businesses:
   `LIVE_VENDOR_CALLS_ENABLED=true` is a separate operator gate.
-- The resettable hackathon path is one explicit hybrid job. `/calls/start` keeps every
-  Google identity in the logical batch run, routes only one preselected final-batch
-  identity to the allow-listed `DEMO_PHONE_NUMBER`, and leaves every other row
-  transcript-only. `/calls/demo` then calls the same human back for negotiation.
+- The resettable hackathon path is one explicit hybrid job. After review, `/launch`
+  calls Google Places live, promotes every callable identity, routes only one to the
+  allow-listed `DEMO_PHONE_NUMBER` in quote batch one, leaves every other row
+  transcript-only, then recalls the same human automatically after the final barrier.
 - Never use a debug transcript as proof of a live voice criterion or imply a simulated
   offer came from the named Google business. In the disclosed role-play it may be used
   only as exact “simulated demo-market” leverage.
@@ -48,7 +48,7 @@ Mode selection:
 - debug on → `negotiator/debugcalls.py`, transcript-only;
 - debug off + Google vendor → ElevenLabs native Twilio batch calling;
 - simulated company → live ElevenLabs agent-to-agent bridge;
-- prepared hybrid `/calls/start` → preselected human explorer in quote batch one,
+- prepared hybrid `/launch` → live Places discovery, selected human explorer in quote batch one,
   N-1 debug transcripts, then an automatic grounded callback after the full barrier;
 - prepared `/calls/demo phase=negotiate` → legacy explicit rehearsal endpoint only.
 
@@ -100,9 +100,9 @@ Verified offline:
 
 Implemented but **not yet live-proven**:
 
-1. The integrated `/calls/start` final-batch Twilio call reaching the configured human
+1. The integrated `/launch` first-batch Twilio call reaching the configured human
    and finalizing its initial transcript/MP3.
-2. The `/calls/demo phase=negotiate` callback measurably moving price or terms using an
+2. The automatic final callback measurably moving price or terms using an
    exact, explicitly disclosed simulated demo-market offer from the completed run.
 3. Three distinct live role-play negotiation-style artifacts; the one-human hybrid
    run alone does not prove this criterion.
@@ -117,12 +117,14 @@ transcripts, and recordings exist. The judge-facing checkbox is in
 ## Runtime/API contract
 
 - `GET /api/runtime-config` → debug behavior plus masked demo/Twilio readiness.
-- `POST /api/jobs/{id}/call-list/discover` and `GET .../call-list` → discovery.
+- `POST /api/jobs/{id}/launch` → confirm, fresh live Google Places discovery, promote
+  all callable results, select the role-player and start the prepared campaign.
+- Legacy `call-list` APIs remain diagnostic only; there is no Call List UI.
 - `POST /api/jobs/{id}/companies/from-call-list {}` → promote all callable Google
   vendors. `count=0` means all; positive count exists only for old/diagnostic clients.
 - `POST /api/jobs/{id}/calls/start {phase, company_ids?, retry_completed?,
   recommended_only?, idempotency_key?}` → atomic/idempotent background run.
-  `parallel` is deprecated and ignored. On a prepared demo this is quote-only and
+  `parallel` is deprecated and ignored. The prepared demo uses `/launch`; internally it
   includes all vendors; the selected human explores in quote batch one and is
   automatically recalled only after the final quote barrier.
 - `GET /api/jobs/{id}/call-queue` → live summary, batches, rows, and follow-ups.

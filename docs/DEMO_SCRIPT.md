@@ -3,8 +3,9 @@
 This is one resettable hybrid job with one consenting human role-player and two
 real phone calls total.
 
-- Google Places supplies every displayed market identity.
-- One preselected Google identity is represented by the consenting human at the
+- A fresh Google Places API request after the final review supplies every displayed
+  market identity and coordinate.
+- One resulting Google identity is represented by the consenting human at the
   server allow-listed demo destination. Its stored Google phone and place ID are
   never changed or sent to the provider.
 - The imported Twilio source number ends in `5722`. It is the outbound
@@ -15,7 +16,7 @@ real phone calls total.
   transcript turns and final quote use the same persistent Call ID.
 - After every quote batch crosses its hard barrier, the backend automatically
   calls the same human once more with the final grounded knowledge snapshot.
-- The operator's one Start click explicitly authorizes those two calls. There is
+- The operator's one Review/Launch click explicitly authorizes those two calls. There is
   no second frontend POST and no call loop.
 
 Synthetic offers may be used only as explicitly disclosed **simulated
@@ -28,7 +29,7 @@ It proves the connected loop:
 
 1. document intake;
 2. short browser voice completion;
-3. user review and confirmation;
+3. user review, live Google Places discovery and automatic launch;
 4. all-vendor square-root quote batching with progressive knowledge;
 5. one live exploratory quote from a consenting human;
 6. one live grounded negotiation after all quote barriers;
@@ -41,7 +42,7 @@ run as three live counterpart styles.
 ## Preflight—no calls
 
 1. Keep `DEBUG_CALLS=true`. The prepared demo is a narrow exception that routes
-   only its preselected identity to `DEMO_PHONE_NUMBER`.
+   only its post-discovery selected identity to `DEMO_PHONE_NUMBER`.
 2. Confirm `DEMO_PHONE_NUMBER` is the consenting human, while the ElevenLabs
    imported Twilio number ending `5722` is selected by
    `ELEVENLABS_PHONE_NUMBER_ID`.
@@ -55,7 +56,8 @@ run as three live counterpart styles.
    `demo_intake_pdf_url="/api/demo/intake-pdf"`.
 6. Confirm the Lovable API base is the current tunnel:
    `https://travesti-championship-presented-machinery.trycloudflare.com`.
-7. Ensure no prior demo has active or leased work.
+7. Confirm `GOOGLE_PLACES_API_KEY` is configured; discovery must not fall back to cache.
+8. Ensure no prior demo has active or leased work.
 
 None of these checks starts a conversation or phone call.
 
@@ -67,18 +69,16 @@ Run:
 python -m negotiator.demo_reset
 ```
 
-To choose a Google identity:
+To request a specific identity from the later live result:
 
 ```bash
 python -m negotiator.demo_reset --live-vendor "Exact Google vendor name"
 ```
 
-The command creates a new **unconfirmed** plumbing job with an empty spec,
-reuses the saved Google call list, promotes all callable Google vendors,
-preselects the human identity, enables automatic negotiation, and archives old
-demo jobs without deleting their evidence.
-
-Do not use `--rediscover` unless a fresh market scan is intentionally wanted.
+The command creates a new **unconfirmed** plumbing job with an empty spec, enables
+automatic negotiation, and archives old demo jobs without deleting their evidence.
+It performs no discovery, promotes no company and starts no call. Discovery is always
+fresh and deferred until the reviewed `/launch` action. `--rediscover` is deprecated.
 Do not use `--wipe-learnings` during a normal run.
 
 Refresh Lovable, open the returned `job_id`, and show that it is awaiting intake
@@ -130,48 +130,33 @@ The Estimator must acknowledge the document, avoid re-asking saved facts, merge
 only new answers, and finish. Show its browser transcript as it happens. When it
 disconnects, Lovable refetches the Job and form.
 
-## 3. Review and confirm—30 seconds
+## 3. Review, discover and launch—one deliberate click
 
 Open Spec and show the one structured scope built by document + voice. Point out
 that every vendor receives this exact confirmed scope.
 
-Confirm with:
+Read the consent and check it:
+
+> I reviewed the job and authorize exactly two live calls to the configured human
+> role-player. No Google business will be called.
+
+Submit one fresh idempotency key:
 
 ```http
-POST /api/jobs/{job_id}/confirm
-```
-
-Confirmation does not start calls. Any later spec change makes it unconfirmed
-again.
-
-On Call list show all real Google identities and the one row marked
-**Consenting human role-play · batch 1**. The saved business number will not be
-dialled.
-
-## 4. Explicitly authorize and start—one deliberate click
-
-On Calls, read the consent before checking it:
-
-> I authorize QuoteWise to make two real calls to the configured demo
-> role-player: an exploratory quote call in the first batch and one automatic
-> negotiation callback after all quote batches finish. No Google business will
-> be called.
-
-Then submit one fresh idempotency key:
-
-```http
-POST /api/jobs/{job_id}/calls/start
+POST /api/jobs/{job_id}/launch
 Content-Type: application/json
 
 {
-  "phase": "quote",
   "idempotency_key": "<fresh UUID>",
   "authorize_demo_calls": true
 }
 ```
 
-Do not send `company_ids`, `parallel`, a phone number or a negotiation request.
-The prepared demo is rejected without `authorize_demo_calls=true`.
+This one endpoint validates the spec, calls Google Places live, saves and promotes
+every callable result, selects the role-play identity, confirms the job and starts
+the batches. Do not send state, query, `company_ids`, `parallel`, a phone number or a
+negotiation request. The Call List page does not exist. On success Lovable navigates
+directly to Calls and shows the live Places discovery receipt.
 
 The response exposes:
 
@@ -184,7 +169,7 @@ The response exposes:
 - `auto_negotiation_status=waiting_for_quote_batches`;
 - `demo_calls_authorized=true`.
 
-## 5. First batch: live exploratory quote + streaming market
+## 4. First batch: live exploratory quote + streaming market
 
 Answer when the selected target enters `calling` in **batch 1**. The Caller must:
 
@@ -215,7 +200,7 @@ At the top, show backend-authoritative current best, observed range, and
 called/total. Show batch progress and knowledge version. The next quote batch
 cannot begin until every first-batch call—including the live human—terminates.
 
-## 6. Hard quote barriers and progressive knowledge
+## 5. Hard quote barriers and progressive knowledge
 
 As each later synthetic batch runs, open two transcript drawers and show distinct
 vendor behavior. Say explicitly:
@@ -234,7 +219,7 @@ At each complete barrier:
 
 Do not claim same-batch information was available early.
 
-## 7. Automatic live negotiation callback—normally within one minute
+## 6. Automatic live negotiation callback—normally within one minute
 
 After the final quote barrier, do **not** click or POST anything. The same durable
 run creates the callback as `auto_negotiation_batch`, with:
@@ -261,7 +246,7 @@ Respond with a lower itemised all-in offer after the agent makes a sensible,
 grounded ask. Restate the final total, binding status, deposit, validity and any
 waived fee clearly.
 
-## 8. Show the verified result—45 seconds
+## 7. Show the verified result and map—45 seconds
 
 After the call terminalizes:
 
@@ -269,7 +254,9 @@ After the call terminalizes:
 - open the exact concession and leverage IDs in the transcript;
 - play authenticated audio for the two live role-play attempts;
 - show the sticky best/range/called update;
-- open Compare and show ranking, itemisation, red flags and evidence.
+- open Compare and show ranking, itemisation, red flags and evidence;
+- show the Places map: one price pin per geolocated offer and a starred pin for
+  the backend-selected preferred result.
 
 Celebrate **New best offer, verified in the live negotiation** only if the server's
 `summary.current_best_offer.company_id` is the selected role-player and the
@@ -286,7 +273,7 @@ business received a call.
 - **Parsing fails:** show the server detail and retry the same file deliberately.
 - **Voice unavailable:** verify microphone permission, Estimator provisioning and
   tunnel. Do not mark intake complete.
-- **Start rejected:** confirm the spec and explicit two-call checkbox; verify both
+- **Launch rejected:** complete intake and the explicit two-call checkbox; verify Places and both
   phone configuration flags. Do not bypass `authorize_demo_calls`.
 - **Target does not ring:** verify the allow-listed destination, imported Twilio
   source, API key, tunnel and provisioned agents. Do not use a Google phone.

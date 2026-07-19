@@ -8,10 +8,12 @@ Honesty is architecture here: the negotiator agent has no way to state a
 competing bid except get_competing_quotes, which reads the real quote DB.
 It structurally cannot invent leverage.
 """
+from datetime import datetime, timezone
+
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import auth, db
 from .benchmarks import counterparty_pricing, evaluate_red_flags, market_range
@@ -20,7 +22,8 @@ from .config import RECORDINGS_DIR, UPLOADS_DIR, personas, vertical
 from .models import Company, Job, LearnedIn, LoginIn, OutcomeIn, QuoteIn, RegisterIn
 from .packs import list_packs, load_pack
 from .report import build_report
-from market_discovery.router import router as call_list_router
+from market_discovery.router import get_discovery_service, router as call_list_router
+from market_discovery.service import DiscoveryService
 
 app = FastAPI(title="QuoteWise")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -95,6 +98,10 @@ def runtime_config(user: dict = Depends(auth.current_user)):
         "twilio_number_configured": bool(config.ELEVENLABS_PHONE_NUMBER_ID),
         "live_vendor_calls_enabled": config.LIVE_VENDOR_CALLS_ENABLED,
         "demo_intake_pdf_url": "/api/demo/intake-pdf",
+        "call_list_ui_enabled": False,
+        "review_launch_endpoint": "/api/jobs/{job_id}/launch",
+        "google_places_live_at_launch": True,
+        "google_places_configured": bool(config.GOOGLE_PLACES_API_KEY),
     }
 
 
@@ -319,6 +326,8 @@ def companies_from_call_list(job_id: str, body: FromCallListIn,
                      phone=item["phone"], source="google_places", persona=p["id"],
                      rating=item.get("rating"), review_count=item.get("review_count"),
                      address=item.get("address", ""),
+                     latitude=item.get("latitude"), longitude=item.get("longitude"),
+                     url=item.get("url", ""), categories=item.get("categories", []),
                      discovery_sources=item.get("sources", ["google_places"]),
                      external_ids=item.get("source_ids", {}))
         db.put("companies", co.id, co.model_dump(), job_id=job_id)
@@ -413,9 +422,169 @@ def follow_ups(job_id: str, user: dict = Depends(auth.current_user)):
             "recommendations": job.get("follow_up_plan", [])}
 
 
+class LaunchJobIn(BaseModel):
+    """One deliberate review action: live discovery plus the two-call demo."""
+
+    model_config = ConfigDict(extra="forbid")
+    authorize_demo_calls: bool = False
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
+@app.post("/api/jobs/{job_id}/launch")
+def launch_job(job_id: str, body: LaunchJobIn,
+               user: dict = Depends(auth.current_user),
+               service: DiscoveryService = Depends(get_discovery_service)):
+    """Confirm a prepared demo, call Google Places live, then start batches.
+
+    Market discovery is real and happens only after the user reviews the spec.
+    Telephony remains separate: N-1 Places identities get synthetic transcript
+    calls, while the selected identity is routed only to the allow-listed human
+    in quote batch one and the automatic final negotiation batch.
+    """
+    job = _owned_job(job_id, user)
+    demo = job.get("demo_mode") if isinstance(job.get("demo_mode"), dict) else {}
+    if job.get("archived") or not (demo.get("active") and demo.get("roleplay")):
+        raise HTTPException(409, "This launch flow is available only for an active prepared demo.")
+    if not body.authorize_demo_calls:
+        raise HTTPException(
+            409,
+            "Review requires explicit authorization for exactly two calls to the allow-listed human.",
+        )
+    if not job.get("documents") or "document" not in job.get("spec_source", ""):
+        raise HTTPException(409, "Upload the demo document before review and launch.")
+    if "interview" not in job.get("spec_source", ""):
+        raise HTTPException(409, "Complete the short voice interview before review and launch.")
+
+    from .spec_validation import validate_spec
+    errors = validate_spec(job.get("spec", {}), _pack(job))
+    if errors:
+        raise HTTPException(422, {"message": "Spec is not valid and cannot be launched",
+                                  "errors": errors})
+
+    launch = job.get("launch") if isinstance(job.get("launch"), dict) else {}
+    previous_key = launch.get("idempotency_key", "")
+    if previous_key and previous_key != body.idempotency_key:
+        raise HTTPException(
+            409,
+            "This job already has a launch attempt. Reuse its idempotency key; never create a second campaign.",
+        )
+    if not previous_key:
+        claimed = db.compare_and_set_json(
+            "jobs", job_id, "launch", job.get("launch"),
+            {"launch": {
+                "idempotency_key": body.idempotency_key,
+                "status": "discovering_google_places",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        if claimed is None:
+            raise HTTPException(409, "Another launch request is already preparing this job.")
+        job = claimed
+        launch = job["launch"]
+
+    discovery = job.get("call_list", {})
+    fresh_discovery_ready = bool(
+        discovery.get("discovery_mode") == "live_google_places_at_launch"
+        and discovery.get("saved") and discovery.get("items")
+    )
+    if not fresh_discovery_ready:
+        settings = demo.get("discovery", {})
+        query = str(settings.get("query") or _pack(job)["meta"]["counterparty_noun"])
+        state = str(settings.get("state") or "North Carolina")
+        target = int(settings.get("target") or 25)
+        try:
+            discovery = service.discover_google_places(query, state, target)
+        except ValueError as exc:
+            failed = db.get("jobs", job_id) or job
+            failed["launch"] = {**launch, "status": "discovery_failed", "error": str(exc)[:300]}
+            failed["demo_mode"] = {**demo, "status": "google_places_failed"}
+            db.put("jobs", job_id, failed)
+            raise HTTPException(503, str(exc))
+        except Exception as exc:
+            failed = db.get("jobs", job_id) or job
+            failed["launch"] = {**launch, "status": "discovery_failed", "error": str(exc)[:300]}
+            failed["demo_mode"] = {**demo, "status": "google_places_failed"}
+            db.put("jobs", job_id, failed)
+            raise HTTPException(502, f"Live Google Places discovery failed: {str(exc)[:250]}")
+        if not discovery.get("saved") or not discovery.get("items"):
+            raise HTTPException(404, "Live Google Places discovery returned no callable businesses.")
+        job = db.get("jobs", job_id) or job
+        job["call_list"] = discovery
+        job["launch"] = {**launch, "status": "promoting_google_places",
+                         "google_places_generated_at": discovery.get("generated_at", "")}
+        db.put("jobs", job_id, job)
+
+    from . import callrunner
+    from .demo_reset import _select_live_vendor
+    companies = callrunner.sync_google_companies(job_id)
+    demo = (db.get("jobs", job_id) or job).get("demo_mode", demo)
+    try:
+        selected = _select_live_vendor(companies, demo.get("selection_query", ""))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+
+    job = db.get("jobs", job_id) or job
+    job["confirmed"] = True
+    job["demo_mode"] = {
+        **demo,
+        "status": "google_places_complete_starting_calls",
+        "workflow_stage": "calls",
+        "live_company_id": selected["id"],
+        "live_company_name": selected["name"],
+        "live_company_google_place_id": selected.get("external_ids", {}).get("google_places", ""),
+        "discovery": {
+            **demo.get("discovery", {}),
+            "status": "completed",
+            "generated_at": discovery.get("generated_at", ""),
+            "result_count": len(companies),
+            "live_api": True,
+        },
+    }
+    job["launch"] = {**job.get("launch", launch), "status": "starting_calls",
+                     "selected_company_id": selected["id"]}
+    db.put("jobs", job_id, job)
+
+    try:
+        run = callrunner.start_calls(
+            job_id, "quote", idempotency_key=body.idempotency_key,
+            authorize_demo_calls=True,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+
+    job = db.get("jobs", job_id) or job
+    job["launch"] = {**job.get("launch", launch), "status": "launched",
+                     "run_id": run.get("run_id", "")}
+    job["demo_mode"] = {**job["demo_mode"], "status": "calls_running",
+                        "demo_calls_authorized": True}
+    db.put("jobs", job_id, job)
+    return {
+        "launched": True,
+        "redirect": f"/job/{job_id}/calls",
+        "discovery": {
+            "provider": "google_places",
+            "live_api": True,
+            "generated_at": discovery.get("generated_at", ""),
+            "raw_results": discovery.get("raw_results", 0),
+            "callable_vendors": len(companies),
+        },
+        "live_company": {"id": selected["id"], "name": selected["name"]},
+        "run": run,
+    }
+
+
 @app.post("/api/jobs/{job_id}/confirm")
 def confirm_spec(job_id: str, user: dict = Depends(auth.current_user)):
     job = _owned_job(job_id, user)
+    demo = job.get("demo_mode") if isinstance(job.get("demo_mode"), dict) else {}
+    if demo.get("active") and demo.get("roleplay"):
+        raise HTTPException(
+            409,
+            f"Prepared demos use POST /api/jobs/{job_id}/launch so review triggers fresh "
+            "Google Places discovery and the batch campaign atomically.",
+        )
     if job.get("spec", {}).get("vertical", job["vertical"]) != job["vertical"]:
         raise HTTPException(422, "Spec vertical does not match the job vertical")
     from .spec_validation import validate_spec

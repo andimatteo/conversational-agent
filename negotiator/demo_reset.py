@@ -4,7 +4,6 @@ Usage::
 
     python -m negotiator.demo_reset
     python -m negotiator.demo_reset --live-vendor "Acme Plumbing"
-    python -m negotiator.demo_reset --rediscover
     python -m negotiator.demo_reset --wipe-learnings
 
 Every reset creates a new unconfirmed demo job. Previous demo jobs are archived
@@ -12,11 +11,10 @@ logically; their calls, quotes, batches, run claims, recall reservations,
 recordings and uploads remain untouched. This is important both for evidence
 and for ensuring a reset is never a hidden destructive retry mechanism.
 
-The new job retains real Google Places identities. Exactly one promoted Google
-vendor is selected as the human role-play identity. The call orchestrator may
-route that identity to the server-side allow-listed demo number; this module
-never reads a destination from CLI input and never changes the vendor's saved
-Google phone number.
+The new job contains no cached market. After the user reviews the spec, the
+launch endpoint calls Google Places live, promotes every callable result and
+selects one identity for the human role-play. This module never reads a phone
+destination from CLI input and never starts discovery or telephony.
 """
 from __future__ import annotations
 
@@ -136,8 +134,7 @@ def _select_live_vendor(companies: list[dict], query: str = "") -> dict:
     )
     if not candidates:
         raise LookupError(
-            "No callable Google Places vendor is available. Re-run with --rediscover "
-            "after configuring Google Places discovery."
+            "No callable Google Places vendor is available from the fresh launch discovery."
         )
     needle = (query or "").strip().casefold()
     if not needle:
@@ -249,19 +246,6 @@ def reset(
     if errors:
         raise RuntimeError(f"Demo spec no longer matches the plumbing pack: {errors}")
 
-    reused_call_list, source_job_id = _saved_call_list(user["id"])
-    if rediscover or not reused_call_list:
-        call_list = _discover_call_list(pack)
-        call_list_source = "rediscovered"
-        source_job_id = ""
-    else:
-        call_list = reused_call_list
-        call_list_source = "reused_saved_scan"
-    if not call_list.get("items"):
-        raise LookupError(
-            "Market discovery returned no businesses; the existing demo remains active."
-        )
-
     prepared_at = _now()
     session_id = db.new_id("demo")
     job = Job(
@@ -279,7 +263,6 @@ def reset(
     )
     record = job.model_dump()
     record.update({
-        "call_list": call_list,
         "knowledge_version": 0,
         "follow_up_plan": [],
         "archived": False,
@@ -293,36 +276,12 @@ def reset(
                 "vertical": DEMO_VERTICAL,
                 "area_code": DEMO_AREA_CODE,
                 "prepared_at": prepared_at,
-                "call_list_source": call_list_source,
-                "source_job_id": source_job_id,
+                "call_list_source": "fresh_google_places_at_launch",
+                "source_job_id": "",
             },
         },
     })
     db.put("jobs", job.id, record)
-
-    try:
-        # Promote every callable Google result before selecting. The selected
-        # Company record retains its real Google phone and place id; routing to
-        # the demo phone is a later server-side orchestration decision.
-        from .callrunner import sync_google_companies
-
-        companies = sync_google_companies(job.id)
-        selected = _select_live_vendor(companies, live_vendor)
-    except Exception as exc:
-        failed = db.get("jobs", job.id) or record
-        failed.update({
-            "archived": True,
-            "archived_at": _now(),
-            "archive_reason": "demo_reset_preparation_failed",
-        })
-        failed["demo_mode"] = {
-            **failed.get("demo_mode", {}),
-            "active": False,
-            "status": "preparation_failed",
-            "error": f"{type(exc).__name__}: {exc}"[:300],
-        }
-        db.put("jobs", job.id, failed)
-        raise
 
     record = db.get("jobs", job.id) or record
     record["demo_mode"] = {
@@ -332,17 +291,26 @@ def reset(
         "roleplay": True,
         "auto_negotiate": True,
         "workflow_stage": "awaiting_documents_voice_and_confirmation",
-        "live_company_id": selected["id"],
-        "live_company_name": selected["name"],
-        "live_company_google_place_id": selected["external_ids"]["google_places"],
+        "live_company_id": "",
+        "live_company_name": "Pending fresh Google Places discovery",
+        "live_company_google_place_id": "",
         "selection_query": (live_vendor or "").strip(),
         "selection_strategy": "query" if (live_vendor or "").strip() else "deterministic_first",
+        "discovery": {
+            "provider": "google_places",
+            "state": DISCOVERY_STATE,
+            "query": pack["meta"]["counterparty_noun"],
+            "target": DISCOVERY_TARGET,
+            "required_at_launch": True,
+            "status": "pending_user_review",
+        },
         "labels": {
             "synthetic": SYNTHETIC_LABEL,
             "live": LIVE_ROLEPLAY_LABEL,
         },
         "truthful_description": (
-            "Google Places supplies the market identities. The selected identity is represented "
+            "A fresh Google Places API call after review supplies the market identities. "
+            "The selected identity is represented "
             "by an authorised human role-player at the configured demo phone. Other rows are "
             "synthetic transcript-only while DEBUG_CALLS=true; never describe those businesses "
             "as contacted."
@@ -361,17 +329,18 @@ def reset(
         # Retain the old response key for scripts while making its non-destructive
         # meaning explicit in the new key above.
         "deleted_previous": [],
-        "vendors": len(companies),
-        "call_list_items": len(call_list.get("items", [])),
-        "call_list_source": call_list_source,
-        "live_company_id": selected["id"],
-        "live_company_name": selected["name"],
+        "vendors": 0,
+        "call_list_items": 0,
+        "call_list_source": "pending_fresh_google_places_at_launch",
+        "live_company_id": "",
+        "live_company_name": "Pending fresh Google Places discovery",
         "live_label": LIVE_ROLEPLAY_LABEL,
         "synthetic_label": SYNTHETIC_LABEL,
         "debug_calls": DEBUG_CALLS,
         "demo_phone_ready": bool(DEMO_PHONE_NUMBER and ELEVENLABS_PHONE_NUMBER_ID),
         "auto_negotiate": True,
         "confirmed": False,
+        "discovery_deferred": True,
         "learnings_wiped": wiped,
     }
 
@@ -381,7 +350,8 @@ def main() -> None:
         description="Prepare a fresh resettable demo without deleting prior evidence"
     )
     parser.add_argument(
-        "--rediscover", action="store_true", help="perform a fresh market scan (uses quota)"
+        "--rediscover", action="store_true",
+        help="deprecated: discovery always runs live after the user review"
     )
     parser.add_argument(
         "--live-vendor",
@@ -399,14 +369,8 @@ def main() -> None:
     result = reset(args.rediscover, args.wipe_learnings, args.live_vendor)
     print(f"archived previous demo jobs: {result['archived_previous'] or '(none)'}")
     print(f"demo job: {result['job_id']}  (awaiting user confirmation, owner {DEMO_EMAIL})")
-    print(
-        f"vendors promoted: {result['vendors']} of {result['call_list_items']} discovered "
-        f"({result['call_list_source']})"
-    )
-    print(
-        f"live role-play identity: {result['live_company_name']} "
-        f"({result['live_company_id']})"
-    )
+    print("Google Places discovery: pending the final review action (no cached list reused)")
+    print(f"live role-play identity: {result['live_company_name']}")
     print(f"LIVE LABEL: {result['live_label']}")
     print(f"SYNTHETIC LABEL: {result['synthetic_label']}")
     print(
@@ -418,14 +382,13 @@ def main() -> None:
     print(f"""
 RUNBOOK:
   1. upload the demo PDF and complete the short browser voice intake
-  2. review and confirm the unified structured job specification
-  3. authorised campaign    : POST /api/jobs/{result['job_id']}/calls/start {{"phase":"quote","authorize_demo_calls":true}}
-     selected live identity : {result['live_company_id']} ({result['live_company_name']})
-     This one explicit action authorises the exploratory call in batch 1 and
-     the automatic grounded callback after every quote batch is terminal.
-  4. watch batch knowledge  : GET  /api/jobs/{result['job_id']}/call-queue
-  5. inspect exact evidence : GET  /api/jobs/{result['job_id']}/calls
-  6. ranked evidence report : GET  /api/jobs/{result['job_id']}/report
+  2. review, authorize and launch: POST /api/jobs/{result['job_id']}/launch
+     {{"authorize_demo_calls":true,"idempotency_key":"fresh-uuid"}}
+     This calls Google Places live, promotes every callable result, selects the
+     role-play identity, then starts the quote batches automatically.
+  3. watch batch knowledge  : GET  /api/jobs/{result['job_id']}/call-queue
+  4. inspect exact evidence : GET  /api/jobs/{result['job_id']}/calls
+  5. ranked evidence report : GET  /api/jobs/{result['job_id']}/report
 
 Only grounded offers from the frozen batch snapshot may be cited. A debug-generated
 offer must always be described aloud as simulated demo-market data; it is never

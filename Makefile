@@ -7,6 +7,7 @@ test:
 	$(PYTHON) -m tests.estimator_test
 	$(PYTHON) -m tests.documents_test
 	$(PYTHON) -m tests.demo_intake_pdf_test
+	$(PYTHON) -m tests.demo_launch_test
 	$(PYTHON) -m tests.market_discovery_test
 	$(PYTHON) -m tests.callqueue_test
 	$(PYTHON) -m tests.smoke_test

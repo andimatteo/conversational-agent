@@ -23,15 +23,15 @@ the ElevenLabs challenge.
 | Learn from every completed vendor call | Implemented and tested | A mandatory backend finalization pass extracts price-relevant questions, upserts them by domain+area with call/vendor provenance, and feeds future intake forms. |
 | Recall vendors | Implemented and tested | Batch completion produces explainable follow-up recommendations; selected vendors can be recalled with exact DB leverage. An atomic persistent guard permits at most two callbacks per job/vendor, including reserved, failed and completed attempts, preventing loops and harassment. |
 | Ranked report with transcript evidence | Implemented and tested | Risk-aware ranking, fee detail, evidence verification status, call id, conversation id and authenticated audio URL. Debug evidence is explicitly labelled synthetic and has no audio. |
-| Twilio + ElevenLabs live phone demo | Code complete; live proof pending | A Twilio source number is imported in ElevenLabs and its ID is configured locally. `demo_reset` preselects one Google identity; `/calls/start` routes that identity to `DEMO_PHONE_NUMBER` as an explorer in quote batch one, then automatically recalls it with grounded context after every quote barrier. Provider terminal state, transcript and audio are reconciled. The current public tunnel must be reachable and agents re-provisioned before rehearsal. |
+| Twilio + ElevenLabs live phone demo | Code complete; live proof pending | After review, `/launch` calls Google Places live, promotes every callable identity and routes only one to `DEMO_PHONE_NUMBER` as an explorer in quote batch one, then automatically recalls it with grounded context after every quote barrier. Every Google phone remains suppressed. Provider terminal state, transcript and audio are reconciled. |
 | Closed-loop live demonstration | Not yet proven | Final acceptance requires one recorded run: voice+document intake → confirm → three live styles → at least one grounded concession → report with playable evidence. |
 
 ## Safety distinction
 
 - `DEBUG_CALLS=true`: real Google vendor identity, generated structured
   transcript, no phone, no counter-agent, no ElevenLabs session, no audio.
-- Prepared hybrid demo with `DEBUG_CALLS=true`: every vendor remains in the logical
-  square-root batch run, but exactly one preselected identity is routed to the
+- Prepared hybrid demo with `DEBUG_CALLS=true`: fresh Google Places discovery is real
+  and every result remains in the logical square-root batch run, but exactly one identity is routed to the
   server-side allow-listed human in quote batch one, then automatically recalled
   after all quote barriers. The human is disclosed as a role-player; N-1 offers
   remain explicitly synthetic.

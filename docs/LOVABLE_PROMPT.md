@@ -1,5 +1,8 @@
 # Lovable prompt — QuoteWise dashboard
 
+> **Superseded:** this file contains the retired Call List page. Use
+> `docs/LOVABLE_DEMO_COMPLETE_PROMPT.md` for the live Google Places review/launch flow.
+
 How to use: paste everything below the `---` into a NEW Lovable project
 (lovable.dev) as the first message, **attaching `assets/logo.png` to that same
 message** (it's the official logo). The backend (FastAPI + cloudflared tunnel)

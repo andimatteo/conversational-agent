@@ -200,10 +200,18 @@ def main() -> None:
     try:
         # With no query the choice is stable and independent of random company ids.
         first = demo_reset.reset()
-        assert first["live_company_name"] == "Alpha Plumbing"
+        assert first["discovery_deferred"] is True
+        assert first["live_company_id"] == ""
         first_job = db.get("jobs", first["job_id"])
         assert first_job["confirmed"] is False and first_job["archived"] is False
         assert first_job["spec"] == {}
+        assert "call_list" not in first_job
+        assert db.where("companies", job_id=first["job_id"]) == []
+        # Attach historical evidence only to prove the next reset preserves it;
+        # launch-time discovery itself is covered by demo_launch_test.
+        first_job["call_list"] = CALL_LIST
+        db.put("jobs", first["job_id"], first_job)
+        callrunner.sync_google_companies(first["job_id"])
         evidence = _attach_terminal_evidence(first["job_id"])
 
         # The second reset selects a different real Google identity by query and
@@ -239,19 +247,18 @@ def main() -> None:
         assert fresh["knowledge_version"] == 0 and fresh["follow_up_plan"] == []
         assert fresh["demo_mode"]["roleplay"] is True
         assert fresh["demo_mode"]["auto_negotiate"] is True
-        assert fresh["demo_mode"]["live_company_name"] == "Zulu Plumbing"
-        assert fresh["demo_mode"]["template"]["source_job_id"] == first["job_id"]
+        assert fresh["demo_mode"]["live_company_id"] == ""
+        assert fresh["demo_mode"]["live_company_name"].startswith("Pending")
+        assert fresh["demo_mode"]["template"]["source_job_id"] == ""
+        assert fresh["demo_mode"]["selection_query"] == "Zulu"
+        assert fresh["demo_mode"]["discovery"]["required_at_launch"] is True
         assert db.where("calls", job_id=second["job_id"]) == []
         assert db.where("quotes", job_id=second["job_id"]) == []
         assert db.where("call_runs", job_id=second["job_id"]) == []
         assert db.where("call_batches", job_id=second["job_id"]) == []
 
-        selected = db.get("companies", second["live_company_id"])
-        assert selected["name"] == "Zulu Plumbing"
-        assert selected["phone"] == "+17045550103"
-        assert selected["external_ids"]["google_places"] == "places/zulu"
-        assert selected["phone"] != config.DEMO_PHONE_NUMBER
-        assert fresh["demo_mode"]["live_company_google_place_id"] == "places/zulu"
+        assert db.where("companies", job_id=second["job_id"]) == []
+        assert fresh["demo_mode"]["live_company_google_place_id"] == ""
 
         # An active attempt blocks reset before a third job can be created or
         # the current demo can be archived.
@@ -259,11 +266,11 @@ def main() -> None:
         db.put("calls", active_call_id, {
             "id": active_call_id,
             "job_id": second["job_id"],
-            "company_id": selected["id"],
+            "company_id": "co_pending_launch",
             "kind": "quote",
             "status": "queued",
             "created_at": "2026-01-03T00:00:00+00:00",
-        }, job_id=second["job_id"], company_id=selected["id"])
+        }, job_id=second["job_id"], company_id="co_pending_launch")
         jobs_before = {job["id"] for job in db.where("jobs")}
         try:
             demo_reset.reset()
@@ -278,7 +285,7 @@ def main() -> None:
 
         print(
             "DEMO RESET TEST PASSED: archive preserved evidence, clean job, "
-            "Google identity, no calls, active-work guard"
+            "deferred live discovery, no calls, active-work guard"
         )
     finally:
         demo_reset._discover_call_list = original_discover

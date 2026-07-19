@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from .geo import NominatimGeocoder
 from .normalize import merge_businesses
-from .providers import default_providers
+from .providers import GooglePlacesProvider, default_providers
 
 REQUIRED_SOURCES = ("google_places", "yelp", "openstreetmap")
 
@@ -55,4 +55,47 @@ class DiscoveryService:
             "raw_results": len(raw_rows),
             "total": len(callable_rows),
             "items": [row.to_dict() for row in callable_rows],
+        }
+
+    def discover_google_places(self, query: str, state: str, target: int = 25) -> dict:
+        """Perform a fresh Google Places Text Search for the launch workflow.
+
+        This is deliberately separate from transcript simulation. A successful
+        result proves that the displayed company identities came from a live
+        Places API request made after the user reviewed the job.
+        """
+        query, state = query.strip(), state.strip()
+        if not query or not state:
+            raise ValueError("query and state are required")
+        area = self.geocoder.resolve_state(state)
+        provider = next(
+            (row for row in self.providers if row.name == "google_places"),
+            GooglePlacesProvider(),
+        )
+        if not provider.enabled():
+            raise ValueError("GOOGLE_PLACES_API_KEY is required to launch this job")
+        rows = provider.search(query, area, target)
+        allowed_states = {area.code.casefold(), area.name.casefold()}
+        callable_rows = [
+            row for row in merge_businesses(rows)
+            if row.phone and (not row.state or row.state.casefold() in allowed_states)
+        ]
+        callable_rows.sort(key=lambda row: (
+            -(row.rating or 0), -(row.review_count or 0), row.name.casefold()
+        ))
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "query": query,
+            "state": {"name": area.name, "code": area.code},
+            "target_per_provider": target,
+            "required_sources": ["google_places"],
+            "complete": True,
+            "saved": bool(callable_rows),
+            "provider_status": {
+                "google_places": {"status": "ok", "results": len(rows), "live_api": True}
+            },
+            "raw_results": len(rows),
+            "total": len(callable_rows),
+            "items": [row.to_dict() for row in callable_rows],
+            "discovery_mode": "live_google_places_at_launch",
         }

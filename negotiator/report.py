@@ -80,6 +80,31 @@ def build_report(job_id: str) -> dict:
 
     rows.sort(key=lambda r: r["score"], reverse=True)
     winner = next((r for r in rows if r.get("trusted") and r["score"] >= 0), None)
+    winner_id = winner.get("company", {}).get("id", "") if winner else ""
+    map_points = []
+    for rank, row in enumerate(rows, start=1):
+        company = row.get("company", {})
+        latitude, longitude = company.get("latitude"), company.get("longitude")
+        if latitude is None or longitude is None:
+            continue
+        total = row.get("final_total")
+        map_points.append({
+            "company_id": company.get("id", ""),
+            "company_name": company.get("name", ""),
+            "latitude": latitude,
+            "longitude": longitude,
+            "address": company.get("address", ""),
+            "google_maps_url": company.get("url", ""),
+            "rating": company.get("rating"),
+            "review_count": company.get("review_count"),
+            "rank": rank,
+            "outcome": row.get("outcome", ""),
+            "final_total": total,
+            "price_label": f"${total:,.0f}" if total is not None else "No verified quote",
+            "trusted": bool(row.get("trusted")),
+            "preferred": company.get("id") == winner_id,
+            "red_flag_count": len(row.get("red_flags", [])),
+        })
 
     demo_roleplay = bool((job.get("demo_mode") or {}).get("roleplay"))
     demo_live_company_id = (job.get("demo_mode") or {}).get("live_company_id", "")
@@ -93,6 +118,11 @@ def build_report(job_id: str) -> dict:
         "benchmark": bench,
         "market_evidence": pack["meta"].get("evidence", []),
         "ranking": rows,
+        "map": {
+            "points": map_points,
+            "preferred_company_id": winner_id,
+            "coordinate_source": "google_places_live_discovery",
+        },
         "recommendation": _recommendation(
             winner, rows, bench, demo_roleplay, demo_live_company_id
         ) if winner else
