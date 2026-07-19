@@ -27,7 +27,9 @@ def build_report(job_id: str) -> dict:
     for co in companies:
         quotes = sorted(db.where("quotes", job_id=job_id, company_id=co["id"]),
                         key=lambda q: q.get("created_at", ""))
-        initial = next((q for q in quotes if q["phase"] == "initial"), None)
+        # latest initial: a caller may refine mid-call (lowball anchor first,
+        # then the real all-in once hidden fees are surfaced)
+        initial = next((q for q in reversed(quotes) if q["phase"] == "initial"), None)
         negotiated = next((q for q in reversed(quotes) if q["phase"] == "negotiated"), None)
         best = negotiated or initial
         co_calls = [c for c in calls if c["company_id"] == co["id"]]

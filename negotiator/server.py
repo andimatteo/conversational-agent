@@ -165,6 +165,156 @@ def voice_session(job_id: str, user: dict = Depends(auth.current_user)):
             "dynamic_variables": {"job_id": job["id"]}}
 
 
+# --------------------------------------------------------------------------
+# The call queue: seed the simulated market, start calls, watch it resolve
+# --------------------------------------------------------------------------
+@app.post("/api/jobs/{job_id}/companies/simulated")
+def seed_simulated_market(job_id: str, user: dict = Depends(auth.current_user)):
+    """Create this job's callable market: one company per counterparty persona
+    of the job's domain (idempotent). Demo calls run agent-to-agent against
+    these three negotiation styles."""
+    import json as _json
+    from .config import registry_path
+    job = _owned_job(job_id, user)
+    existing = {c.get("persona") for c in db.where("companies", job_id=job_id)}
+    agents = (_json.loads(registry_path().read_text()).get("agents", {})
+              if registry_path().exists() else {})
+    created = []
+    for p in personas(job.get("vertical")):
+        if p["id"] in existing:
+            continue
+        co = Company(id=db.new_id("co"), name=p["company_name"], persona=p["id"],
+                     source="simulated", agent_id=agents.get(f"counterparty:{p['id']}", ""))
+        db.put("companies", co.id, co.model_dump(), job_id=job_id)
+        created.append({"id": co.id, "name": co.name, "style": p["style"]})
+    return {"created": created, "companies": db.where("companies", job_id=job_id)}
+
+
+class FromCallListIn(BaseModel):
+    count: int = 3                  # take the top-N discovered places
+    companies: list[dict] = []      # or explicit picks: [{name, phone}]
+
+
+@app.post("/api/jobs/{job_id}/companies/from-call-list")
+def companies_from_call_list(job_id: str, body: FromCallListIn,
+                             user: dict = Depends(auth.current_user)):
+    """Build the demo market from REAL discovered places WITHOUT ever calling
+    them: each picked business becomes a SYNTHETIC company — real name and
+    phone on the board, behavior played by a simulated counterparty persona
+    (the three negotiation styles, assigned round-robin)."""
+    import json as _json
+    from .config import registry_path
+    job = _owned_job(job_id, user)
+    picks = body.companies or job.get("call_list", {}).get("items", [])[:body.count]
+    if not picks:
+        raise HTTPException(404, "No call list on this job — scan the market first.")
+    ps = personas(job.get("vertical"))
+    agents = (_json.loads(registry_path().read_text()).get("agents", {})
+              if registry_path().exists() else {})
+    existing = {c["name"] for c in db.where("companies", job_id=job_id)}
+    created = []
+    for i, item in enumerate(p for p in picks if p.get("name") and p["name"] not in existing):
+        p = ps[i % len(ps)]
+        co = Company(id=db.new_id("co"), name=item["name"], phone=item.get("phone", ""),
+                     source="synthetic", persona=p["id"],
+                     agent_id=agents.get(f"counterparty:{p['id']}", ""))
+        db.put("companies", co.id, co.model_dump(), job_id=job_id)
+        created.append({"id": co.id, "name": co.name, "style": p["style"]})
+    return {"created": created,
+            "note": "Synthetic demo market: real local businesses by name, behavior "
+                    "SIMULATED by counterparty agents — no real business is ever called."}
+
+
+@app.get("/api/jobs/{job_id}/call-queue")
+def call_queue(job_id: str, user: dict = Depends(auth.current_user)):
+    """Live queue: per-company status (to_call/queued/calling/quote/callback/
+    decline/hangup) + totals. Poll this while calls run."""
+    _owned_job(job_id, user)
+    from . import callrunner
+    return callrunner.queue_state(job_id)
+
+
+class StartCallsIn(BaseModel):
+    phase: str = "quote"            # quote | negotiate
+    company_ids: list[str] = []
+    parallel: bool = False
+
+
+@app.post("/api/jobs/{job_id}/calls/start")
+def start_calls(job_id: str, body: StartCallsIn, user: dict = Depends(auth.current_user)):
+    """Kick off the calls server-side (background); the queue endpoint shows
+    progress. Spec must be confirmed first — the backend enforces it."""
+    job = _owned_job(job_id, user)
+    if body.phase not in ("quote", "negotiate"):
+        raise HTTPException(422, "phase must be 'quote' or 'negotiate'")
+    if not job.get("confirmed"):
+        raise HTTPException(409, "Spec not confirmed — confirm it before any call.")
+    from . import callrunner
+    try:
+        return callrunner.start_calls(job_id, body.phase, body.company_ids or None, body.parallel)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+class RealCallIn(BaseModel):
+    to_number: str                  # E.164, e.g. +393401234567
+    phase: str = "negotiate"        # quote | negotiate
+    company_name: str = "Live Vendor (phone)"
+
+
+@app.post("/api/jobs/{job_id}/calls/real")
+def real_call(job_id: str, body: RealCallIn, user: dict = Depends(auth.current_user)):
+    """THE live-demo beat: our agent places a REAL phone call (ElevenLabs
+    native Twilio outbound) to a human playing the vendor — the negotiation
+    happens on a real line, tools/webhooks/logging identical to bridge calls."""
+    import os
+    import httpx
+    from datetime import datetime, timezone
+    import json as _json
+    from .config import ELEVENLABS_API_KEY, registry_path
+    job = _owned_job(job_id, user)
+    if body.phase not in ("quote", "negotiate"):
+        raise HTTPException(422, "phase must be 'quote' or 'negotiate'")
+    if not job.get("confirmed"):
+        raise HTTPException(409, "Spec not confirmed — confirm it before any call.")
+    phone_id = os.getenv("ELEVENLABS_PHONE_NUMBER_ID", "")
+    if not phone_id:
+        raise HTTPException(503, "ELEVENLABS_PHONE_NUMBER_ID missing — import a Twilio "
+                                 "number in the ElevenLabs dashboard (Phone Numbers), then "
+                                 "put its id in .env and restart.")
+    reg = _json.loads(registry_path().read_text()) if registry_path().exists() else {}
+    agent_id = reg.get("agents", {}).get("caller" if body.phase == "quote" else "closer", "")
+    if not agent_id:
+        raise HTTPException(503, "Agents not provisioned — run `python -m agents.provision`.")
+
+    co = Company(id=db.new_id("co"), name=body.company_name, phone=body.to_number, source="human")
+    db.put("companies", co.id, co.model_dump(), job_id=job_id)
+    call_id = db.new_id("call")
+    db.put("calls", call_id, {"id": call_id, "job_id": job_id, "company_id": co.id,
+                              "kind": body.phase,
+                              "started_at": datetime.now(timezone.utc).isoformat()},
+           job_id=job_id, company_id=co.id)
+
+    r = httpx.post("https://api.elevenlabs.io/v1/convai/twilio/outbound-call",
+                   headers={"xi-api-key": ELEVENLABS_API_KEY},
+                   json={"agent_id": agent_id, "agent_phone_number_id": phone_id,
+                         "to_number": body.to_number,
+                         "conversation_initiation_client_data": {
+                             "dynamic_variables": {"job_id": job_id, "company_id": co.id,
+                                                   "company_name": body.company_name}}},
+                   timeout=30)
+    if r.status_code >= 300:
+        raise HTTPException(502, f"ElevenLabs outbound call failed: {r.status_code} {r.text[:300]}")
+    out = r.json()
+    call = db.get("calls", call_id)
+    call["conversation_id"] = out.get("conversation_id", "")
+    db.put("calls", call_id, call, job_id=job_id, company_id=co.id)
+    return {"dialing": True, "company_id": co.id, "call_id": call_id,
+            "conversation_id": call["conversation_id"], "detail": out}
+
+
 @app.post("/api/jobs/{job_id}/confirm")
 def confirm_spec(job_id: str, user: dict = Depends(auth.current_user)):
     job = _owned_job(job_id, user)
@@ -414,8 +564,8 @@ def t_counterparty_pricing(ref: CompanyRef):
     co = db.get("companies", ref.company_id)
     if not co or not co.get("persona"):
         raise HTTPException(404, "Not a simulated company.")
-    persona = next(p for p in personas() if p["id"] == co["persona"])
     job = _job(ref.job_id)
+    persona = next(p for p in personas(job.get("vertical")) if p["id"] == co["persona"])
     return counterparty_pricing(persona, job["spec"], _pack(job))
 
 

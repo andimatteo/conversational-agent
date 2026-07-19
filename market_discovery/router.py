@@ -54,11 +54,12 @@ def discover_call_list(body: DiscoverCallListIn, job_id: str,
     except Exception as exc:
         raise HTTPException(502, f"Could not resolve the search area: {str(exc)[:200]}")
 
-    # Keep the call list separate from companies/quotes until a real call is scheduled.
+    # Keep the call list separate from companies/quotes until a call is scheduled.
     # This prevents uncalled discovery results from appearing as declines in the report.
-    result["saved"] = False
-    if result["complete"]:
-        result["saved"] = True
+    # Partial scans (a source skipped/failed) are saved too: the demo market is
+    # built FROM this list, and Google+OSM alone is a perfectly good list.
+    result["saved"] = bool(result["items"])
+    if result["saved"]:
         job["call_list"] = result
         db.put("jobs", job_id, job)
     return result
