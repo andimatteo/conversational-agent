@@ -1,4 +1,4 @@
-# CLAUDE.md — session handoff for The Negotiator
+# CLAUDE.md — session handoff for QuoteWise (ElevenLabs "The Negotiator" challenge)
 
 Claude Code loads this file automatically at the start of every session. It is the
 single source of truth for project state; update it when state changes.
@@ -66,8 +66,23 @@ DONE and verified offline:
   confirmed against installed SDK. Prompts render `{{job_id}}` etc. correctly.
 - `agents/provision.py` now provisions 9 tools (added get_intake_form,
   log_learned_questions); estimator owns both plus save_job_spec. **Never run live yet.**
-- `negotiator/packgen.py` (AI sheet writer) is code-complete but **needs OPENAI_API_KEY
-  to run** — untested live, same risk class as provisioning.
+- `negotiator/packgen.py` (AI sheet writer) is code-complete but untested live.
+- **Browser voice intake**: `POST /api/jobs/{id}/voice-session` (owner-scoped)
+  returns an ElevenLabs signed wss URL + `{job_id}` dynamic variables; the Lovable
+  frontend uses `@elevenlabs/react` `startSession({signedUrl, dynamicVariables})`
+  with the user's mic. Endpoint live-tested (real signed URL returned); the full
+  browser call is untested until the Lovable app exists. CLI `run_intake` remains
+  the fallback path.
+- **Document intake works LIVE** (verified with a real OpenAI parse): PDFs/photos/text
+  via `POST /api/jobs/{id}/documents` — schema-driven retrieval against the job's pack,
+  merged into the call's spec: docs fill gaps AND can UPDATE fields already on file
+  (parser emits corrections only when the document is more authoritative; every change
+  tracked as a `{field, from, to}` diff on the document record for the frontend),
+  quotes accumulate in `spec.existing_quotes` as closer leverage, insights append to
+  notes, any change resets confirmation. Files land in `data/uploads/{job_id}/`;
+  `GET .../documents` lists them. Offline test: `python -m tests.documents_test`
+  (parser mocked). PDF path uses OpenAI file content parts — live-tested only with
+  text so far.
 
 NOT yet done (needs Andrea's API keys / mic — in order):
 1. Fill `.env` (copy `.env.example`): ELEVENLABS_API_KEY, OPENAI_API_KEY, TAVILY_API_KEY.
@@ -85,6 +100,17 @@ NOT yet done (needs Andrea's API keys / mic — in order):
    schema-driven intake form + learned questions, domains page with AI generation)
    and has the live tunnel URL baked in — update API_BASE in Lovable if the tunnel
    restarts. `docs/DEMO_SCRIPT.md` is still moving-era: refresh before rehearsing.
+
+## Users & auth
+
+`negotiator/auth.py`: PBKDF2-salted passwords, opaque bearer tokens in SQLite
+(`users`/`sessions` tables). Every `/api` job route requires `Authorization:
+Bearer <token>` and is owner-scoped (someone else's job = 404); public: auth
+endpoints, `/api/verticals`, `/api/intake-form`. `/agent-tools/*` stays open —
+ElevenLabs calls it, not users. `POST /api/auth/register|login` → `{token,user}`;
+`GET /api/me` → profile + own jobs. Demo account (seed creates it, owns all
+pre-auth jobs): **demo@negotiator.app / demo1234**. Offline test:
+`python -m tests.auth_test`.
 
 ## Commands
 
