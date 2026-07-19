@@ -51,9 +51,21 @@ class Company(BaseModel):
     rating: Optional[float] = None
 
 
+class RegisterIn(BaseModel):
+    email: str
+    password: str
+    name: str = ""
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
 class Job(BaseModel):
     id: str
     vertical: str
+    user_id: str = ""               # owner — every /api route is scoped to it
     area_code: str = ""             # picks the (vertical, area) pack + learned-question pool
     spec: dict = {}
     spec_source: str = ""           # "interview" | "document" | "interview+document"

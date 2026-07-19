@@ -23,9 +23,14 @@ def li(label, code, amount, kind="fee"):
 
 
 def main():
-    # --- seed job + market -------------------------------------------------
+    # --- seed user + job + market ------------------------------------------
+    import uuid
+    r = c.post("/api/auth/register", json={
+        "email": f"smoke-{uuid.uuid4().hex[:6]}@test.dev", "password": "secret123"})
+    r.raise_for_status()
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
     job = Job(id=db.new_id("job"), vertical="moving", spec=SAMPLE_SPEC,
-              spec_source="sample", confirmed=False)
+              spec_source="sample", confirmed=False, user_id=r.json()["user"]["id"])
     db.put("jobs", job.id, job.model_dump())
 
     cos = {}
@@ -44,7 +49,7 @@ def main():
     # --- guard: no calls before user confirmation --------------------------
     r = c.post("/agent-tools/get_job_spec", json={"job_id": job.id})
     assert r.status_code == 409, "spec guard failed — calls possible before confirmation!"
-    c.post(f"/api/jobs/{job.id}/confirm").raise_for_status()
+    c.post(f"/api/jobs/{job.id}/confirm", headers=h).raise_for_status()
     assert c.post("/agent-tools/get_job_spec", json={"job_id": job.id}).status_code == 200
     print("guard OK: calls locked until spec confirmed")
 
@@ -102,7 +107,7 @@ def main():
     }).raise_for_status()
 
     # --- report ------------------------------------------------------------
-    rep = c.get(f"/api/jobs/{job.id}/report").json()
+    rep = c.get(f"/api/jobs/{job.id}/report", headers=h).json()
     ranked = [(r["company"]["name"], r.get("final_total"), r["score"]) for r in rep["ranking"]]
     print("\nranking:")
     for name, total, score in ranked:

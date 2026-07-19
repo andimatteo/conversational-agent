@@ -17,6 +17,14 @@ from negotiator.server import app
 
 c = TestClient(app)
 
+
+def _auth() -> dict:
+    r = c.post("/api/auth/register", json={
+        "email": f"estimator-{uuid.uuid4().hex[:6]}@test.dev", "password": "secret123"})
+    r.raise_for_status()
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
 PLUMBING_SPEC = {
     "vertical": "plumbing",
     "area_code": "28202",
@@ -48,9 +56,10 @@ def main():
     assert load_pack("plumbing", "99999")["meta"]["vertical"] == "plumbing"
 
     # --- job creation picks vertical + area from the sheet ------------------
-    job = c.post("/api/jobs", json={"vertical": "plumbing"}).json()
+    h = _auth()
+    job = c.post("/api/jobs", json={"vertical": "plumbing"}, headers=h).json()
     assert job["vertical"] == "plumbing" and job["area_code"] == "28202"
-    assert c.post("/api/jobs", json={"vertical": "does-not-exist"}).status_code == 404
+    assert c.post("/api/jobs", json={"vertical": "does-not-exist"}, headers=h).status_code == 404
     print(f"job {job['id']} on plumbing/28202")
 
     # --- intake form = base questions (+ learned, none required yet) --------
@@ -68,7 +77,7 @@ def main():
     assert c.post("/agent-tools/get_job_spec", json={"job_id": job["id"]}).status_code == 409
     r = c.post("/agent-tools/save_job_spec", json={"job_id": job["id"], "spec": PLUMBING_SPEC}).json()
     assert r["missing_required_fields"] == []
-    c.post(f"/api/jobs/{job['id']}/confirm").raise_for_status()
+    c.post(f"/api/jobs/{job['id']}/confirm", headers=h).raise_for_status()
     assert c.post("/agent-tools/get_job_spec", json={"job_id": job["id"]}).status_code == 200
     print("spec guard OK: 409 until saved complete + user-confirmed")
 
@@ -95,12 +104,12 @@ def main():
     assert [q["question"] for q in r["added"]] == [qa, qb], r
     assert len(r["already_known"]) == 2
     # surfaced to the user on the job record
-    assert [q["question"] for q in c.get(f"/api/jobs/{job['id']}").json()["discovered_questions"]] == [qa, qb]
+    assert [q["question"] for q in c.get(f"/api/jobs/{job['id']}", headers=h).json()["discovered_questions"]] == [qa, qb]
     # a NEW job in the same area now gets them in its form; times_seen dedupe works
     r = c.post("/agent-tools/log_learned_questions",
                json={"job_id": job["id"], "questions": [{"question": qa}]}).json()
     assert r["added"] == []
-    job2 = c.post("/api/jobs", json={"vertical": "plumbing"}).json()
+    job2 = c.post("/api/jobs", json={"vertical": "plumbing"}, headers=h).json()
     form2 = c.post("/agent-tools/get_intake_form", json={"job_id": job2["id"]}).json()
     learned = {q["question"]: q for q in form2["learned_questions"]}
     # times_seen: initial add (1) + messy duplicate in call 1 (+1) + call 2 (+1)

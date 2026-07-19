@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS quotes    (id TEXT PRIMARY KEY, job_id TEXT, company_
                                       phase TEXT, data TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS calls     (id TEXT PRIMARY KEY, job_id TEXT, company_id TEXT, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS learned_questions (id TEXT PRIMARY KEY, vertical TEXT, area_code TEXT, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS users     (id TEXT PRIMARY KEY, email TEXT UNIQUE, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions  (id TEXT PRIMARY KEY, user_id TEXT, data TEXT NOT NULL);
 """
 
 

@@ -6,10 +6,17 @@
 import argparse
 import json
 
-from . import db
+from . import auth, db
 from .benchmarks import market_range
 from .config import personas, registry_path, vertical
 from .models import Company, Job
+
+DEMO_EMAIL, DEMO_PASSWORD = "demo@negotiator.app", "demo1234"
+
+
+def demo_user() -> dict:
+    existing = db.where("users", email=DEMO_EMAIL)
+    return existing[0] if existing else auth.create_user(DEMO_EMAIL, DEMO_PASSWORD, "Demo")
 
 # The brief's own scenario: the move with a documented $1,158-$6,506 spread.
 SAMPLE_SPEC = {
@@ -42,8 +49,9 @@ def main():
     ap.add_argument("--with-sample-spec", action="store_true")
     args = ap.parse_args()
 
+    user = demo_user()
     job = Job(id=db.new_id("job"), vertical=vertical()["meta"]["vertical"],
-              area_code=vertical()["meta"].get("area_code", ""))
+              area_code=vertical()["meta"].get("area_code", ""), user_id=user["id"])
     if args.with_sample_spec:
         job.spec, job.spec_source, job.confirmed = SAMPLE_SPEC, "sample", True
     db.put("jobs", job.id, job.model_dump())
@@ -61,7 +69,7 @@ def main():
         db.put("companies", co.id, co.model_dump(), job_id=job.id)
         print(f"  {co.id}  {co.name:<28} [{p['style']}]")
 
-    print(f"\nJob: {job.id}  (confirmed={job.confirmed})")
+    print(f"\nJob: {job.id}  (confirmed={job.confirmed})  owner: {DEMO_EMAIL} / {DEMO_PASSWORD}")
     if args.with_sample_spec:
         print(f"Benchmark for this job: {market_range(job.spec)}")
     print(f"\nNext: python -m simulation.run_calls --job {job.id} --phase quote")

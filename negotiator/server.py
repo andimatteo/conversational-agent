@@ -8,19 +8,48 @@ Honesty is architecture here: the negotiator agent has no way to state a
 competing bid except get_competing_quotes, which reads the real quote DB.
 It structurally cannot invent leverage.
 """
-from fastapi import FastAPI, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import db
+from . import auth, db
 from .benchmarks import counterparty_pricing, evaluate_red_flags, market_range
-from .config import personas, vertical
-from .models import Company, Job, LearnedIn, OutcomeIn, QuoteIn
+from .config import UPLOADS_DIR, personas, vertical
+from .models import Company, Job, LearnedIn, LoginIn, OutcomeIn, QuoteIn, RegisterIn
 from .packs import list_packs, load_pack
 from .report import build_report
 
-app = FastAPI(title="The Negotiator")
+app = FastAPI(title="QuoteWise")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+# --------------------------------------------------------------------------
+# Auth — each user sees ONLY their own profile and jobs
+# --------------------------------------------------------------------------
+@app.post("/api/auth/register")
+def register(body: RegisterIn):
+    user = auth.create_user(body.email, body.password, body.name)
+    return {"token": auth.issue_token(user), "user": auth.public(user)}
+
+
+@app.post("/api/auth/login")
+def login(body: LoginIn):
+    user = auth.verify_user(body.email, body.password)
+    if not user:
+        raise HTTPException(401, "wrong email or password")
+    return {"token": auth.issue_token(user), "user": auth.public(user)}
+
+
+@app.post("/api/auth/logout")
+def logout(authorization: str = Header("")):
+    auth.revoke_token(authorization.removeprefix("Bearer ").strip())
+    return {"logged_out": True}
+
+
+@app.get("/api/me")
+def me(user: dict = Depends(auth.current_user)):
+    """The user's profile with their own jobs — and nobody else's."""
+    return {"user": auth.public(user), "jobs": _user_jobs(user)}
 
 
 # --------------------------------------------------------------------------
@@ -32,27 +61,26 @@ class JobCreate(BaseModel):
 
 
 @app.post("/api/jobs")
-def create_job(body: JobCreate | None = None):
+def create_job(body: JobCreate | None = None, user: dict = Depends(auth.current_user)):
     vname = (body.vertical if body and body.vertical else vertical()["meta"]["vertical"])
     try:
         pack = load_pack(vname, body.area_code if body else "")
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
     area = (body.area_code if body and body.area_code else pack["meta"].get("area_code", ""))
-    job = Job(id=db.new_id("job"), vertical=vname, area_code=area)
+    job = Job(id=db.new_id("job"), vertical=vname, area_code=area, user_id=user["id"])
     db.put("jobs", job.id, job.model_dump())
     return job
 
 
 @app.get("/api/jobs")
-def list_jobs():
-    jobs = db.where("jobs")
-    return sorted(jobs, key=lambda j: j.get("created_at", ""), reverse=True)
+def list_jobs(user: dict = Depends(auth.current_user)):
+    return _user_jobs(user)
 
 
 @app.get("/api/jobs/{job_id}")
-def get_job(job_id: str):
-    return _job(job_id)
+def get_job(job_id: str, user: dict = Depends(auth.current_user)):
+    return _owned_job(job_id, user)
 
 
 class SpecBody(BaseModel):
@@ -60,10 +88,10 @@ class SpecBody(BaseModel):
 
 
 @app.put("/api/jobs/{job_id}/spec")
-def put_spec(job_id: str, body: SpecBody):
+def put_spec(job_id: str, body: SpecBody, user: dict = Depends(auth.current_user)):
     """The web intake form's door — same rules as the voice interview:
     any spec change resets user confirmation."""
-    job = _job(job_id)
+    job = _owned_job(job_id, user)
     job["spec"] = {**job["spec"], **body.spec}
     if "form" not in job["spec_source"]:
         job["spec_source"] = (job["spec_source"] + "+form").lstrip("+")
@@ -74,19 +102,70 @@ def put_spec(job_id: str, body: SpecBody):
 
 
 @app.post("/api/jobs/{job_id}/documents")
-async def upload_document(job_id: str, file: UploadFile):
+async def upload_document(job_id: str, file: UploadFile, user: dict = Depends(auth.current_user)):
+    """Extra intake door: PDFs (other quotes, system/equipment specs), photos,
+    text files. Extracted data is COMBINED with the call's data into the same
+    job spec used for the calls — interview answers win, documents fill gaps,
+    quotes found in documents become negotiation leverage."""
+    from datetime import datetime, timezone
     from .docparse import parse_document  # lazy: needs OPENAI_API_KEY
-    job = _job(job_id)
-    spec = parse_document(file.filename, await file.read())
-    job["spec"] = {**spec, **{k: v for k, v in job["spec"].items() if v}}  # interview answers win
-    job["spec_source"] = (job["spec_source"] + "+document").lstrip("+")
+    job = _owned_job(job_id, user)
+    content = await file.read()
+    extracted = parse_document(file.filename, content, _pack(job), job["spec"])
+
+    doc_id = db.new_id("doc")
+    folder = UPLOADS_DIR / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{doc_id}_{file.filename}").write_bytes(content)
+
+    filled, updates = _merge_document(job["spec"], extracted)
+    doc = {"id": doc_id, "filename": file.filename,
+           "uploaded_at": datetime.now(timezone.utc).isoformat(),
+           "extracted_fields": filled,
+           "updates": updates,   # [{field, from, to}] — the doc corrected these
+           "has_quote": bool(extracted.get("existing_quote")),
+           "insights": extracted.get("insights", [])}
+    job.setdefault("documents", []).append(doc)
+    if "document" not in job["spec_source"]:
+        job["spec_source"] = (job["spec_source"] + "+document").lstrip("+")
+    if filled or updates:
+        job["confirmed"] = False  # spec changed -> the user must re-confirm
     db.put("jobs", job_id, job)
-    return {"job": job, "parsed": spec}
+    return {"job": job, "document": doc, "extracted": extracted}
+
+
+@app.get("/api/jobs/{job_id}/documents")
+def list_documents(job_id: str, user: dict = Depends(auth.current_user)):
+    return _owned_job(job_id, user).get("documents", [])
+
+
+@app.post("/api/jobs/{job_id}/voice-session")
+def voice_session(job_id: str, user: dict = Depends(auth.current_user)):
+    """Signed ElevenLabs session so the BROWSER can talk to the Estimator:
+    the frontend starts a WebRTC/WS conversation with the user's mic, passing
+    job_id as a dynamic variable — same interview, same spec, no CLI needed."""
+    import json as _json
+    import httpx
+    from .config import ELEVENLABS_API_KEY, registry_path
+    job = _owned_job(job_id, user)
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(503, "ELEVENLABS_API_KEY missing — voice is disabled.")
+    reg = _json.loads(registry_path().read_text()) if registry_path().exists() else {}
+    agent_id = reg.get("agents", {}).get("estimator", "")
+    if not agent_id:
+        raise HTTPException(503, "Estimator agent not provisioned — run `python -m agents.provision`.")
+    r = httpx.get("https://api.elevenlabs.io/v1/convai/conversation/get-signed-url",
+                  params={"agent_id": agent_id},
+                  headers={"xi-api-key": ELEVENLABS_API_KEY}, timeout=20)
+    if r.status_code >= 300:
+        raise HTTPException(502, f"ElevenLabs refused the signed URL: {r.status_code} {r.text[:200]}")
+    return {"signed_url": r.json()["signed_url"], "agent_id": agent_id,
+            "dynamic_variables": {"job_id": job["id"]}}
 
 
 @app.post("/api/jobs/{job_id}/confirm")
-def confirm_spec(job_id: str):
-    job = _job(job_id)
+def confirm_spec(job_id: str, user: dict = Depends(auth.current_user)):
+    job = _owned_job(job_id, user)
     missing = [f for f in _pack(job)["spec_schema"]["required"] if not job["spec"].get(f)]
     if missing:
         raise HTTPException(422, f"Spec incomplete, cannot confirm. Missing: {missing}")
@@ -112,7 +191,7 @@ class GenerateIn(BaseModel):
 
 
 @app.post("/api/verticals/generate")
-def generate_vertical(body: GenerateIn):
+def generate_vertical(body: GenerateIn, user: dict = Depends(auth.current_user)):
     """AI-write the sheet for a new domain/area (validated before saving)."""
     from .packgen import generate_pack  # lazy: needs OPENAI_API_KEY
     try:
@@ -144,30 +223,34 @@ def intake_form(vertical_name: str = Query("", alias="vertical"), area_code: str
 
 
 @app.get("/api/jobs/{job_id}/market")
-def market(job_id: str, city: str, state: str):
+def market(job_id: str, city: str, state: str, user: dict = Depends(auth.current_user)):
     """Real-world call-list discovery via Tavily (simulated personas stay the callable demo market)."""
+    _owned_job(job_id, user)
     from .discovery import discover
     return {"discovered": discover(city, state), "note": "Demo calls run against the simulated personas."}
 
 
 @app.get("/api/jobs/{job_id}/companies")
-def companies(job_id: str):
+def companies(job_id: str, user: dict = Depends(auth.current_user)):
+    _owned_job(job_id, user)
     return db.where("companies", job_id=job_id)
 
 
 @app.get("/api/jobs/{job_id}/quotes")
-def quotes(job_id: str):
+def quotes(job_id: str, user: dict = Depends(auth.current_user)):
+    _owned_job(job_id, user)
     return db.where("quotes", job_id=job_id)
 
 
 @app.get("/api/jobs/{job_id}/calls")
-def calls(job_id: str):
+def calls(job_id: str, user: dict = Depends(auth.current_user)):
+    _owned_job(job_id, user)
     return db.where("calls", job_id=job_id)
 
 
 @app.get("/api/jobs/{job_id}/report")
-def report(job_id: str):
-    _job(job_id)
+def report(job_id: str, user: dict = Depends(auth.current_user)):
+    _owned_job(job_id, user)
     return build_report(job_id)
 
 
@@ -296,11 +379,14 @@ def t_competing_quotes(ref: CompanyRef):
                     "phase": q["phase"],
                     "line_items": [{"label": li["label"], "amount": li["amount"]} for li in q["line_items"]]})
     spec = _job(ref.job_id)["spec"]
-    if spec.get("existing_quote"):  # from document intake: leverage the user already had
-        eq = spec["existing_quote"]
-        out.append({"company": eq.get("company", "prior written quote"), "total": eq.get("total"),
-                    "binding": True, "phase": "document",
-                    "line_items": eq.get("line_items", [])})
+    doc_quotes = list(spec.get("existing_quotes") or [])
+    if spec.get("existing_quote"):  # legacy single-quote key
+        doc_quotes.append(spec["existing_quote"])
+    for eq in doc_quotes:  # from document intake: leverage the user already had
+        if eq.get("total"):
+            out.append({"company": eq.get("company", "prior written quote"), "total": eq.get("total"),
+                        "binding": True, "phase": "document",
+                        "line_items": eq.get("line_items", [])})
     return {"competing_quotes": out,
             "rules": "Cite ONLY these, with exact company names and figures. If empty, you have no competing bids and must not imply otherwise."}
 
@@ -328,6 +414,64 @@ def _job(job_id: str) -> dict:
     if not job:
         raise HTTPException(404, "job not found")
     return job
+
+
+def _owned_job(job_id: str, user: dict) -> dict:
+    """404 (not 403) for someone else's job: its existence is none of your business."""
+    job = _job(job_id)
+    if job.get("user_id") != user["id"]:
+        raise HTTPException(404, "job not found")
+    return job
+
+
+def _user_jobs(user: dict) -> list[dict]:
+    jobs = [j for j in db.where("jobs") if j.get("user_id") == user["id"]]
+    return sorted(jobs, key=lambda j: j.get("created_at", ""), reverse=True)
+
+
+def _merge_document(spec: dict, extracted: dict) -> tuple[list[str], list[dict]]:
+    """Combine document data into the intake spec. A document doesn't just fill
+    gaps: it can UPDATE fields already on file (the parser only emits a different
+    value when the document is more authoritative). Every change is tracked as a
+    diff for the frontend, and re-confirmation is forced upstream. Quotes
+    accumulate as leverage, insights append to notes.
+    Returns (filled_field_names, updates[{field, from, to}])."""
+    filled, updates = [], []
+
+    def _set(container: dict, key: str, new, label: str):
+        cur = container.get(key)
+        if not cur:
+            container[key] = new
+            filled.append(label)
+        elif cur != new:
+            updates.append({"field": label, "from": cur, "to": new})
+            container[key] = new
+
+    for k, v in extracted.items():
+        if k in ("existing_quote", "existing_quotes", "insights", "notes", "vertical") \
+                or v in (None, "", [], {}):
+            continue
+        if isinstance(v, dict) and isinstance(spec.get(k), dict):
+            for sk, sv in v.items():
+                if sv not in (None, "", [], {}):
+                    _set(spec[k], sk, sv, f"{k}.{sk}")
+        else:
+            _set(spec, k, v, k)
+
+    quotes = extracted.get("existing_quotes") or ([extracted["existing_quote"]]
+                                                  if extracted.get("existing_quote") else [])
+    for eq in quotes:
+        if eq.get("total"):
+            spec.setdefault("existing_quotes", []).append(eq)
+            filled.append("existing_quotes")
+
+    insights = [s for s in extracted.get("insights", []) if s]
+    if insights:
+        base = spec.get("notes") or ""
+        spec["notes"] = (base + ("\n" if base else "")
+                         + "\n".join(f"[doc] {s}" for s in insights))
+        filled.append("notes")
+    return filled, updates
 
 
 def _pack(job: dict) -> dict:
