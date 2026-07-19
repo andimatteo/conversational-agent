@@ -36,8 +36,12 @@ def vertical() -> dict:
 
 
 @lru_cache
-def personas() -> list[dict]:
-    with open(ROOT / "agents" / "personas.yaml") as f:
+def personas(vertical_name: str | None = None) -> list[dict]:
+    """Counterparty personas for a domain: agents/personas/<vertical>.yaml.
+    The three negotiation styles keep stable ids (stonewaller/lowballer/
+    upseller) across domains; character, company and fees are per-domain."""
+    path = ROOT / "agents" / "personas" / f"{vertical_name or VERTICAL}.yaml"
+    with open(path) as f:
         return yaml.safe_load(f)["personas"]
 
 

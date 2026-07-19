@@ -11,7 +11,8 @@
 personas:
   - id: stonewaller
     company_name: "Summit & Sons Moving"
-    voice: gruff_male          # mapped to a voice_id in provision.py
+    voice: gruff_male
+    first_message: "{{company_name}}."          # mapped to a voice_id in provision.py
     style: "The gruff stonewaller"
     character: >
       Dale, 30 years in the business, dispatching two crews while on the phone.
@@ -41,6 +42,7 @@ personas:
   - id: lowballer
     company_name: "QuickBudget Movers"
     voice: fast_friendly_male
+    first_message: "{{company_name}}, this is Vinny — best rates in town, what've you got for me?"
     style: "The lowballer with hidden fees"
     character: >
       Vinny, upbeat, agreeable, talks fast, best-price-in-town energy.
@@ -69,6 +71,7 @@ personas:
   - id: upseller
     company_name: "Premier Coast Van Lines"
     voice: polished_female
+    first_message: "Thank you for calling {{company_name}}, this is Marissa. How can I make your move wonderful today?"
     style: "The hard-sell upseller"
     character: >
       Marissa, polished sales professional, warm and relentless. Anchors high,

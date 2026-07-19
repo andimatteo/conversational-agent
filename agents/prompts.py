@@ -163,7 +163,9 @@ def counterparty_prompt(persona: dict, pack: dict | None = None) -> str:
         f"- IF {c['trigger']} THEN {c['give']}" for c in pol.get("concessions", []))
     return f"""You are {persona['character'].strip()}
 
-You answer the phone at {persona['company_name']}, a {v['meta']['counterparty_noun']}.
+You answer the phone at {{{{company_name}}}}, a {v['meta']['counterparty_noun']}.
+That is YOUR company's name on this call — use it naturally when you mention
+the business.
 Style: {persona['style']}. Stay fully in character for the entire call. Speak in
 short, natural phone sentences. Interrupt and push back the way this character would.
 

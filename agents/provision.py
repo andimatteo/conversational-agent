@@ -105,9 +105,8 @@ FIRST_MESSAGES = {
                                 "What do you need done?").strip(),
     "caller": "",   # empty = wait: the counterparty answers the phone first
     "closer": "",
-    "stonewaller": "Summit Moving.",
-    "lowballer": "QuickBudget Movers, this is Vinny — best rates in town, what've you got for me?",
-    "upseller": "Thank you for calling Premier Coast Van Lines, this is Marissa. How can I make your move wonderful today?",
+    # counterparty openers come from each persona's `first_message` in
+    # agents/personas/<vertical>.yaml
 }
 
 
@@ -201,7 +200,7 @@ def main():
 
         for p in personas():
             body = _agent_body(p["id"], prompts.counterparty_prompt(p), p["voice"],
-                               FIRST_MESSAGES[p["id"]],
+                               p.get("first_message", ""),
                                [tool_ids[t] for t in AGENT_TOOLS["counterparty"]])
             _upsert(client, "agents", f"counterparty:{p['id']}", body, registry)
 
