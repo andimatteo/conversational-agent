@@ -75,21 +75,39 @@ class BridgeAudioInterface(AudioInterface):
 
     # -- real-time pump -----------------------------------------------------
     def _pump(self):
+        """Emulates a phone line, which is never byte-silent: once the peer is
+        on the line it receives a CONTINUOUS real-time stream — real speech
+        when this agent talks, zero-frames otherwise (the peer's ASR needs the
+        silence to close turns). Speech produced before the peer connects is
+        HELD, not dropped — losing the counterparty's greeting deadlocked the
+        first live call (both sides waited forever)."""
+        silence = b"\x00" * PUMP_CHUNK
         while self._running:
-            try:
-                self._buf += self._q.get(timeout=0.1)
+            try:  # drain everything queued into the buffer, without blocking
+                while True:
+                    self._buf += self._q.get_nowait()
             except queue.Empty:
+                pass
+            if not (self.peer and self.peer.input_callback):
+                time.sleep(0.05)  # hold any buffered speech until they pick up
                 continue
-            while len(self._buf) >= PUMP_CHUNK and self._running:
+            if self._buf:
                 chunk, self._buf = self._buf[:PUMP_CHUNK], self._buf[PUMP_CHUNK:]
-                if self.peer and self.peer.input_callback:
-                    self.peer.input_callback(chunk)
-                if self._speaker:
-                    try:
-                        self._speaker.write(chunk)
-                    except Exception:
-                        self._speaker = None
-                time.sleep(len(chunk) / BYTES_PER_SEC)  # pace to real time
+                if len(chunk) < PUMP_CHUNK:  # flush utterance tails padded out
+                    chunk += b"\x00" * (PUMP_CHUNK - len(chunk))
+                speech = True
+            else:
+                chunk, speech = silence, False
+            try:
+                self.peer.input_callback(chunk)
+            except Exception:
+                pass
+            if self._speaker and speech:
+                try:
+                    self._speaker.write(chunk)
+                except Exception:
+                    self._speaker = None
+            time.sleep(PUMP_CHUNK / BYTES_PER_SEC)  # pace to real time
 
 
 def wire(a: BridgeAudioInterface, b: BridgeAudioInterface):

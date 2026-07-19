@@ -80,7 +80,7 @@ def run_bridge_call(client, our_agent_id, cp_agent_id, job_id, company, kind, li
             pass
     time.sleep(2)  # let sessions flush
 
-    conv_id = getattr(us, "conversation_id", "") or ""
+    conv_id = getattr(us, "_conversation_id", None) or getattr(us, "conversation_id", "") or ""
     _finalize_call(call_id, job_id, company["id"], conv_id)
     return call_id
 
