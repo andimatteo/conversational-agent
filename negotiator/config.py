@@ -21,6 +21,8 @@ DATA_DIR.mkdir(exist_ok=True)
 DB_PATH = DATA_DIR / "negotiator.db"
 RECORDINGS_DIR = DATA_DIR / "recordings"
 RECORDINGS_DIR.mkdir(exist_ok=True)
+UPLOADS_DIR = DATA_DIR / "uploads"
+UPLOADS_DIR.mkdir(exist_ok=True)
 
 
 @lru_cache
