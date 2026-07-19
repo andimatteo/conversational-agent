@@ -86,7 +86,8 @@ Renderizza lo stato reale del backend:
 ```text
 NEW_JOB
  → DOCUMENT_UPLOADING → DOCUMENT_PARSED
- → VOICE_INTAKE_CONNECTED → READY_TO_REVIEW
+ → READY_TO_REVIEW
+   ↘ optional VOICE_INTAKE_CONNECTED when the user chooses it
  → REVIEW_AUTHORIZED
  → GOOGLE_PLACES_DISCOVERING
  → GOOGLE_PLACES_COMPLETE
@@ -105,15 +106,13 @@ Mantieni entrambe le modalità richieste dall'hackathon.
 
 ### Documento
 
-- Recupera il PDF demo con `GET /api/demo/intake-pdf` autenticato.
-- Scaricalo come Blob; bottone **Download demo water-heater PDF**.
 - Dropzone multipart verso `POST /api/jobs/:jobId/documents`, campo `file`.
 - Accetta PDF, immagini e testo secondo gli errori backend.
 - Dopo upload mostra filename, campi estratti, correzioni, insight, eventuali quote
   documentali e validation errors.
 - Refetch Job, Documents e Intake Form dopo ogni upload.
 
-### Voice intake
+### Voice intake opzionale
 
 - `POST /api/jobs/:jobId/voice-session` restituisce la signed URL ElevenLabs.
 - Usa il client React ufficiale ElevenLabs per una conversazione da computer.
@@ -122,6 +121,9 @@ Mantieni entrambe le modalità richieste dall'hackathon.
 - Mostra Connected, Listening, Speaking, Disconnected e gli errori reali.
 - Dopo disconnect refetch Job e `GET /api/intake-form`.
 - Non simulare transcript o completamento dell'intervista nel browser.
+- Non rendere mai l'intervista un prerequisito della review o di `/launch`.
+- Non mostrare “Complete the short voice interview before review and launch”. Una
+  specifica completa e valida ottenuta da documento + form può partire direttamente.
 
 ### Form condiviso
 
@@ -207,7 +209,7 @@ poi naviga immediatamente a `response.redirect`, normalmente `/job/:jobId/calls`
 
 Gestisci:
 
-- 409: missing consent, intake incompleto, launch già esistente o job archived;
+- 409: missing consent, documento assente, launch già esistente o job archived;
 - 422: errori esatti della spec;
 - 502: errore della chiamata live Google Places;
 - 503: API key/config provider assente;
@@ -472,7 +474,7 @@ Mantieni tolleranti i type per campi additivi. Lo stato server è autorevole.
 
 - Esistono solo Intake, Spec, Calls e Compare.
 - La Call List page è rimossa e i vecchi link redirigono a Calls.
-- PDF e voice intake confluiscono nella stessa spec.
+- Documento, form e voice opzionale confluiscono nella stessa spec.
 - La review invia una singola `/launch` con consenso e idempotency key.
 - Dopo review avviene una nuova chiamata reale Google Places, mai un riuso cached.
 - Tutte le identità e coordinate derivano dalla response Places appena salvata.

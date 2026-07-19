@@ -407,10 +407,6 @@ def start_calls(job_id: str, phase: str, company_ids: list[str] | None = None,
             raise RuntimeError(
                 "Prepared demo intake is incomplete: upload the supplied document first."
             )
-        if "interview" not in job.get("spec_source", ""):
-            raise RuntimeError(
-                "Prepared demo intake is incomplete: finish the short voice interview first."
-            )
         target_id = demo.get("live_company_id", "")
         target = next((company for company in companies if company["id"] == target_id), None)
         if not target:

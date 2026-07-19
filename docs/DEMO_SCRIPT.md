@@ -28,7 +28,7 @@ made those offers.
 It proves the connected loop:
 
 1. document intake;
-2. short browser voice completion;
+2. optional short browser voice completion when the document/form leaves gaps;
 3. user review, live Google Places discovery and automatic launch;
 4. all-vendor square-root quote batching with progressive knowledge;
 5. one live exploratory quote from a consenting human;
@@ -132,7 +132,8 @@ disconnects, Lovable refetches the Job and form.
 
 ## 3. Review, discover and launch—one deliberate click
 
-Open Spec and show the one structured scope built by document + voice. Point out
+Open Spec and show the one structured scope built by document + form, plus optional
+voice answers when present. Point out
 that every vendor receives this exact confirmed scope.
 
 Read the consent and check it:

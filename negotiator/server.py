@@ -452,9 +452,6 @@ def launch_job(job_id: str, body: LaunchJobIn,
         )
     if not job.get("documents") or "document" not in job.get("spec_source", ""):
         raise HTTPException(409, "Upload the demo document before review and launch.")
-    if "interview" not in job.get("spec_source", ""):
-        raise HTTPException(409, "Complete the short voice interview before review and launch.")
-
     from .spec_validation import validate_spec
     errors = validate_spec(job.get("spec", {}), _pack(job))
     if errors:

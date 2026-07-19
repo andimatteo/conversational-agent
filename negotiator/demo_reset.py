@@ -290,7 +290,7 @@ def reset(
         "status": "awaiting_intake_and_confirmation",
         "roleplay": True,
         "auto_negotiate": True,
-        "workflow_stage": "awaiting_documents_voice_and_confirmation",
+        "workflow_stage": "awaiting_document_and_review",
         "live_company_id": "",
         "live_company_name": "Pending fresh Google Places discovery",
         "live_company_google_place_id": "",

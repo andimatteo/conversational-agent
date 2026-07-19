@@ -94,7 +94,9 @@ def main() -> None:
     prepared = demo_reset.reset(live_vendor="Beta")
     job = db.get("jobs", prepared["job_id"])
     job["spec"] = demo_reset.DEMO_SPEC
-    job["spec_source"] = "demo+document+interview"
+    # Voice remains available, but launch must work from a complete document+
+    # form spec without requiring a recorded interview.
+    job["spec_source"] = "demo+document+form"
     job["documents"] = [{"id": "doc_demo", "filename": "water-heater.pdf"}]
     db.put("jobs", job["id"], job)
 

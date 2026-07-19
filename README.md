@@ -20,8 +20,9 @@ document intake ─┘       sqrt(n) batches ─────┘            + ran
 
 QuoteWise closes the complete purchasing loop for services whose real price is only
 available by phone. A customer creates a job, uploads a PDF, image, quote or inventory,
-and completes a short browser voice interview. Both inputs merge into one structured
-specification; the customer must review and confirm it before telephony is unlocked.
+and may complete a short browser voice interview for any remaining gaps. Document,
+form and optional voice inputs merge into one structured specification; the customer
+must review it before telephony is unlocked.
 
 After the final review, one launch request performs a fresh Google Places API search,
 promotes every callable Places result,
