@@ -1,4 +1,6 @@
-# THE NEGOTIATOR
+# QUOTEWISE
+
+<img src="assets/logo.png" width="160" alt="QuoteWise — crystal ball with a phone"/>
 
 Voice agents that call, compare, and haggle — built for the Hack-Nation × ElevenLabs
 challenge. Vertical: **household moving** (the market with the receipts: a documented

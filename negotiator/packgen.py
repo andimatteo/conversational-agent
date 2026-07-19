@@ -53,7 +53,7 @@ def _ask_llm(vertical_name: str, area_code: str, notes: str, previous_errors: li
     client = OpenAI(api_key=OPENAI_API_KEY)
 
     system = (
-        "You write domain configuration sheets for 'The Negotiator', a service whose voice "
+        "You write domain configuration sheets for 'QuoteWise', a service whose voice "
         "agents interview a customer, phone local companies for itemised quotes, and negotiate. "
         "A sheet fully retargets the product to a trade+area with zero code changes.\n"
         + _CONTRACT +

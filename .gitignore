@@ -5,3 +5,4 @@ data/
 .venv/
 venv/
 agents/registry.json
+.DS_Store

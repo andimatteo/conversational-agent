@@ -100,7 +100,7 @@ AGENT_TOOLS = {
 FIRST_MESSAGES = {
     # From the domain sheet — swapping VERTICAL swaps the opener too.
     "estimator": vertical().get("estimator_first_message",
-                                "Hi! I'm the intake assistant from The Negotiator — I'll build the "
+                                "Hi! I'm the intake assistant from QuoteWise — I'll build the "
                                 "exact job spec we'll use to get you real, comparable quotes. "
                                 "What do you need done?").strip(),
     "caller": "",   # empty = wait: the counterparty answers the phone first
@@ -137,7 +137,7 @@ def _tool_body(name: str) -> dict:
 
 def _agent_body(name: str, prompt: str, voice_key: str, first_message: str, tool_ids: list[str]) -> dict:
     return {
-        "name": f"negotiator-{name}",
+        "name": f"quotewise-{name}",
         "conversation_config": {
             "agent": {
                 "first_message": first_message,

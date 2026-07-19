@@ -1,6 +1,6 @@
 # ============================================================
 # Vertical pack: MOVING
-# Swapping The Negotiator to another market (auto body, freight,
+# Swapping QuoteWise to another market (auto body, freight,
 # wedding vendors...) means writing a sibling of this file.
 # No agent code changes. Prompts, benchmarks, red flags and
 # negotiation levers are all generated from here.
@@ -23,7 +23,7 @@ estimator_persona: >
   one — stairs, elevators, parking distance, pianos, packing expectations.
 
 estimator_first_message: >
-  Hi! I'm the intake assistant from The Negotiator — I'll build the exact job
+  Hi! I'm the intake assistant from QuoteWise — I'll build the exact job
   spec we'll use to get you real, comparable quotes. First: where are you moving
   from, and to?
 

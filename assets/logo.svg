@@ -1,0 +1,350 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 240 240"
+  width="240"
+  height="240"
+  role="img"
+  aria-labelledby="qw-title qw-description"
+>
+  <title id="qw-title">QuoteWise</title>
+  <desc id="qw-description">
+    A crystal ball containing a smartphone, resting on a purple stand.
+  </desc>
+
+  <defs>
+    <!-- Outer glass -->
+    <radialGradient id="qw-glass" cx="34%" cy="25%" r="82%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.92"/>
+      <stop offset="22%" stop-color="#E0E7FF" stop-opacity="0.78"/>
+      <stop offset="58%" stop-color="#818CF8" stop-opacity="0.7"/>
+      <stop offset="82%" stop-color="#6366F1" stop-opacity="0.82"/>
+      <stop offset="100%" stop-color="#3730A3" stop-opacity="0.94"/>
+    </radialGradient>
+
+    <!-- Inner glow -->
+    <radialGradient id="qw-inner-glow" cx="50%" cy="46%" r="58%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="55%" stop-color="#C7D2FE" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#4338CA" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Stand -->
+    <linearGradient id="qw-base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="45%" stop-color="#4338CA"/>
+      <stop offset="100%" stop-color="#312E81"/>
+    </linearGradient>
+
+    <!-- Smartphone -->
+    <linearGradient id="qw-phone" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E0E7FF"/>
+    </linearGradient>
+
+    <linearGradient id="qw-screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#312E81"/>
+      <stop offset="55%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#818CF8"/>
+    </linearGradient>
+
+    <!-- Restricts the phone to the sphere -->
+    <clipPath id="qw-sphere-clip">
+      <circle cx="120" cy="106" r="84"/>
+    </clipPath>
+
+    <filter id="qw-shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+
+    <filter id="qw-phone-shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow
+        dx="0"
+        dy="5"
+        stdDeviation="5"
+        flood-color="#1E1B4B"
+        flood-opacity="0.38"
+      />
+    </filter>
+  </defs>
+
+  <!-- Shadow beneath the stand -->
+  <ellipse
+    cx="120"
+    cy="224"
+    rx="67"
+    ry="10"
+    fill="#1E1B4B"
+    opacity="0.22"
+    filter="url(#qw-shadow)"
+  />
+
+  <!-- Crystal-ball stand -->
+  <path
+    d="
+      M78 179
+      C83 171 94 167 104 166
+      H136
+      C146 167 157 171 162 179
+      L181 215
+      C184 221 180 227 173 227
+      H67
+      C60 227 56 221 59 215
+      Z
+    "
+    fill="url(#qw-base)"
+  />
+
+  <!-- Upper rim of the stand -->
+  <ellipse
+    cx="120"
+    cy="180"
+    rx="48"
+    ry="14"
+    fill="#312E81"
+  />
+
+  <ellipse
+    cx="120"
+    cy="177"
+    rx="42"
+    ry="9"
+    fill="#818CF8"
+    opacity="0.72"
+  />
+
+  <!-- Phone and atmospheric elements inside the sphere -->
+  <g clip-path="url(#qw-sphere-clip)">
+    <!-- Background haze -->
+    <circle
+      cx="120"
+      cy="106"
+      r="84"
+      fill="#4F46E5"
+      opacity="0.2"
+    />
+
+    <circle
+      cx="120"
+      cy="108"
+      r="68"
+      fill="url(#qw-inner-glow)"
+    />
+
+    <!-- Soft cloud shapes behind phone -->
+    <ellipse
+      cx="83"
+      cy="142"
+      rx="42"
+      ry="17"
+      fill="#C7D2FE"
+      opacity="0.16"
+    />
+
+    <ellipse
+      cx="157"
+      cy="144"
+      rx="46"
+      ry="19"
+      fill="#FFFFFF"
+      opacity="0.11"
+    />
+
+    <!-- Smartphone -->
+    <g
+      transform="rotate(-9 120 107)"
+      filter="url(#qw-phone-shadow)"
+    >
+      <!-- Phone body -->
+      <rect
+        x="88"
+        y="48"
+        width="64"
+        height="116"
+        rx="13"
+        fill="url(#qw-phone)"
+        stroke="#FFFFFF"
+        stroke-width="3"
+      />
+
+      <!-- Screen -->
+      <rect
+        x="94"
+        y="61"
+        width="52"
+        height="84"
+        rx="6"
+        fill="url(#qw-screen)"
+      />
+
+      <!-- Speaker -->
+      <rect
+        x="111"
+        y="54"
+        width="18"
+        height="3"
+        rx="1.5"
+        fill="#6366F1"
+        opacity="0.72"
+      />
+
+      <!-- Front camera -->
+      <circle
+        cx="104"
+        cy="55.5"
+        r="1.8"
+        fill="#6366F1"
+        opacity="0.72"
+      />
+
+      <!-- Phone icon displayed on screen -->
+      <path
+        d="
+          M109 88
+          C106 91 108 99 114 106
+          C121 113 130 117 133 113
+          L138 107
+          C139 105 138 102 136 101
+          L129 97
+          C127 96 125 97 124 99
+          L122 102
+          C118 100 115 97 113 93
+          L116 91
+          C118 90 118 87 117 85
+          L113 79
+          C112 77 109 77 107 79
+          Z
+        "
+        fill="#FFFFFF"
+        opacity="0.95"
+      />
+
+      <!-- Screen reflection -->
+      <path
+        d="
+          M98 66
+          H112
+          L99 123
+          H95
+          V72
+          C95 69 96 67 98 66
+          Z
+        "
+        fill="#FFFFFF"
+        opacity="0.15"
+      />
+
+      <!-- Home indicator -->
+      <rect
+        x="111"
+        y="151"
+        width="18"
+        height="3.5"
+        rx="1.75"
+        fill="#6366F1"
+        opacity="0.8"
+      />
+    </g>
+
+    <!-- Small particles inside the glass -->
+    <circle cx="66" cy="111" r="2.5" fill="#FFFFFF" opacity="0.65"/>
+    <circle cx="174" cy="123" r="2" fill="#FFFFFF" opacity="0.6"/>
+    <circle cx="157" cy="65" r="2.4" fill="#FFFFFF" opacity="0.7"/>
+    <circle cx="75" cy="153" r="1.8" fill="#FFFFFF" opacity="0.52"/>
+  </g>
+
+  <!-- Main glass layer -->
+  <circle
+    cx="120"
+    cy="106"
+    r="84"
+    fill="url(#qw-glass)"
+    opacity="0.43"
+    stroke="#C7D2FE"
+    stroke-width="3"
+  />
+
+  <!-- Glass edge shading -->
+  <circle
+    cx="120"
+    cy="106"
+    r="79"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="2"
+    opacity="0.25"
+  />
+
+  <path
+    d="
+      M47 117
+      C42 78 64 43 96 29
+    "
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="5"
+    stroke-linecap="round"
+    opacity="0.3"
+  />
+
+  <!-- Main reflection -->
+  <ellipse
+    cx="84"
+    cy="61"
+    rx="28"
+    ry="14"
+    fill="#FFFFFF"
+    opacity="0.55"
+    transform="rotate(-32 84 61)"
+  />
+
+  <ellipse
+    cx="67"
+    cy="91"
+    rx="8"
+    ry="16"
+    fill="#FFFFFF"
+    opacity="0.2"
+    transform="rotate(22 67 91)"
+  />
+
+  <!-- Sparkles -->
+  <path
+    d="
+      M177 35
+      L181 46
+      L192 50
+      L181 54
+      L177 65
+      L173 54
+      L162 50
+      L173 46
+      Z
+    "
+    fill="#FFFFFF"
+    opacity="0.96"
+  />
+
+  <path
+    d="
+      M199 76
+      L202 83
+      L209 86
+      L202 89
+      L199 96
+      L196 89
+      L189 86
+      L196 83
+      Z
+    "
+    fill="#FFFFFF"
+    opacity="0.76"
+  />
+
+  <circle
+    cx="186"
+    cy="107"
+    r="3"
+    fill="#FFFFFF"
+    opacity="0.65"
+  />
+</svg>
