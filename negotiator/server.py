@@ -281,9 +281,12 @@ def t_get_job_spec(ref: JobRef):
 
 @app.post("/agent-tools/save_job_spec")
 def t_save_job_spec(body: SpecIn):
-    """Called by the Estimator at the end of the voice interview."""
+    """Called by the Estimator at the end of the voice interview. Empty values
+    are dropped so a partial save can never wipe fields already on file
+    (False/0 are kept — they are real answers)."""
     job = _job(body.job_id)
-    job["spec"] = {**job["spec"], **body.spec}
+    incoming = {k: v for k, v in body.spec.items() if v not in (None, "", [], {})}
+    job["spec"] = {**job["spec"], **incoming}
     job["spec_source"] = ("interview+" + job["spec_source"]).rstrip("+") if job["spec_source"] else "interview"
     job["confirmed"] = False  # any spec change requires re-confirmation
     db.put("jobs", body.job_id, job)
@@ -293,15 +296,22 @@ def t_save_job_spec(body: SpecIn):
 
 @app.post("/agent-tools/get_intake_form")
 def t_get_intake_form(ref: JobRef):
-    """The Estimator's FIRST call: the full question list for this job's
-    domain+area — base sheet questions plus everything learned from
-    previous calls in the same area."""
+    """The Estimator's FIRST call: the question list for this job's domain+area
+    PLUS everything already on file (web form, documents, a previous call) —
+    so the interview only asks for what's actually missing."""
     job = _job(ref.job_id)
     pack = _pack(job)
+    spec = job.get("spec", {})
+    on_file = {k: v for k, v in spec.items() if v not in (None, "", [], {})}
+    missing = [f for f in pack["spec_schema"]["required"] if not spec.get(f)]
     return {"base_questions": pack["estimator_questions"],
             "learned_questions": _learned(job["vertical"], job.get("area_code", "")),
-            "note": "Work through ALL base questions. Learned questions were discovered "
-                    "on previous calls in this service area — ask them too."}
+            "already_on_file": on_file,
+            "missing_required_fields": missing,
+            "note": "Ask ONLY about information NOT in already_on_file — never re-ask "
+                    "what the customer already provided; acknowledge it in one short "
+                    "sentence at most. Learned questions come from previous calls in "
+                    "this service area — ask them too unless already covered."}
 
 
 @app.post("/agent-tools/log_learned_questions")
