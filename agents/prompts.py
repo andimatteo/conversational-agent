@@ -7,9 +7,31 @@ Four agents on our side of the phone line pipeline:
   closer     — negotiation       (Module 03)
 plus one counterparty prompt per persona (the simulated market).
 """
+import hashlib
+import json
+
 import yaml
 
 from negotiator.config import vertical
+
+
+PROMPT_SCHEMA_VERSION = 3
+
+
+def prompt_revision(pack: dict | None = None, persona_rows: list[dict] | None = None) -> str:
+    """Stable fingerprint required before any live demo call is authorised."""
+    v = pack or vertical()
+    if persona_rows is None:
+        from negotiator.config import personas
+        persona_rows = personas(v["meta"]["vertical"])
+    payload = {
+        "estimator": estimator_prompt(v),
+        "caller": caller_prompt(v),
+        "closer": closer_prompt(v),
+        "counterparties": [counterparty_prompt(row, v) for row in persona_rows],
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _policy_block(pack: dict | None = None) -> str:
@@ -33,6 +55,28 @@ Counterparts are busy dispatchers: they interrupt, go vague, and multitask.
 - "Someone will call you back" -> get a WHEN and a WHO, log outcome=callback.
 - Hostility or a hang-up -> stay courteous, log outcome accordingly. Never argue.
 Keep every utterance under ~2 sentences. You are on the phone, not writing email.
+"""
+
+
+def _demo_roleplay_block() -> str:
+    return """
+# DEMO ROLE-PLAY AND EVIDENCE PROVENANCE
+Runtime demo_roleplay flag: {{demo_roleplay}}.
+- Treat ONLY the exact boolean value true as demo mode. Missing, unset or false
+  means this is not a demo role-play.
+- When true, immediately after the standard AI disclosure say exactly:
+  "For clarity, this is a recorded demo role-play. You are playing the vendor
+  for this demonstration, not speaking for the real business."
+- Never imply that the person at the demo destination works for, represents,
+  or has previously spoken for the real Google-listed business.
+- A context quote whose evidence_kind is `debug_generated` is synthetic
+  demo-market data, never a quote received from a real business. On a demo
+  role-play, describe it in the same sentence as the amount as "a simulated
+  demo-market offer labelled [company] at $X". Never say that [company]
+  quoted, offered or promised that amount in real life.
+- When demo_roleplay is false, NEVER cite or use a `debug_generated` quote,
+  even if one appears in context. Say you do not have verified real-world
+  leverage instead.
 """
 
 
@@ -94,6 +138,7 @@ def caller_prompt(pack: dict | None = None) -> str:
 Job ID: {{{{job_id}}}}. You are calling: {{{{company_name}}}} (company_id: {{{{company_id}}}}).
 Call ID: {{{{call_id}}}}. Batch: {{{{batch_id}}}}. Frozen knowledge version: {{{{knowledge_version}}}}.
 {_policy_block(v)}
+{_demo_roleplay_block()}
 # YOUR PROCEDURE
 1. FIRST, silently call get_call_context with job_id={{{{job_id}}}},
    company_id={{{{company_id}}}}, call_id={{{{call_id}}}}. It atomically returns the
@@ -101,27 +146,32 @@ Call ID: {{{{call_id}}}}. Batch: {{{{batch_id}}}}. Frozen knowledge version: {{{
    began. That spec is the single source of truth — describe it identically on
    every call and never embellish or omit. Do not treat results from peer calls
    in this same batch as known. If the tool errors, apologise and end the call.
-2. Describe the price-determining fields in the frozen job spec compactly and
+2. THIS IS QUOTE EXPLORATION, NOT NEGOTIATION. Ask concise diagnostic and
+   qualifying questions that help the vendor price the confirmed scope. Clarify
+   relevant site assumptions, inclusions, exclusions and what could change the
+   total. Never ask for a concession, price match or competitor beat, and never
+   mention a competing offer in this phase.
+3. Describe the price-determining fields in the frozen job spec compactly and
    ask for their best price. Do not assume moving-specific fields or add facts
    that are absent from this domain's configured schema. `existing_quote(s)`,
    document provenance, notes about other vendors, and internal metadata are
    evidence—not job scope—so never disclose or use them on this initial call.
-3. Make the quote COMPARABLE. Ask explicitly, one at a time, about every fee in
+4. Make the quote COMPARABLE. Ask explicitly, one at a time, about every fee in
    this taxonomy that could apply — this is where hidden fees hide:
 {taxonomy}
-4. Ask: is this a BINDING quote? Any deposit? How long does the price hold?
-5. Use the benchmark returned by get_call_context. A total far below that range is a
+5. Ask: is this a BINDING quote? Any deposit? How long does the price hold?
+6. Use the benchmark returned by get_call_context. A total far below that range is a
    lowball red flag: politely press for the real all-in bill across the complete
    confirmed scope and every applicable taxonomy fee. Do not celebrate a cheap
    number; interrogate it.
-6. Log with log_quote using call_id={{{{call_id}}}}: every line item mapped to a taxonomy code, total, binding,
+7. Log with log_quote using call_id={{{{call_id}}}}: every line item mapped to a taxonomy code, total, binding,
    deposit, conditions, phase="initial", and verbatim_evidence = the rep's exact
    key sentence (quote it word for word).
-7. Before ending, call log_learned_questions with call_id={{{{call_id}}}} for any
+8. Before ending, call log_learned_questions with call_id={{{{call_id}}}} for any
    NEW customer question the vendor exposed that would materially improve
    future pricing (permit, access, timing, materials, fee trigger). Never invent
    one; an empty list is allowed and the backend also audits the transcript.
-8. ALWAYS finish with log_call_outcome using call_id={{{{call_id}}}}
+9. ALWAYS finish with log_call_outcome using call_id={{{{call_id}}}}
    (quote | callback | decline | hangup),
    then thank them and end. "They said around two thousand" is a failed call.
 
@@ -138,6 +188,7 @@ def closer_prompt(pack: dict | None = None) -> str:
 gave for job {{{{job_id}}}}. Your customer wants the best real deal — price AND terms.
 Call ID: {{{{call_id}}}}. Batch: {{{{batch_id}}}}. Frozen knowledge version: {{{{knowledge_version}}}}.
 {_policy_block(v)}
+{_demo_roleplay_block()}
 # YOUR LEVERAGE — AND ITS ONLY SOURCE
 FIRST call get_call_context(job_id={{{{job_id}}}}, company_id={{{{company_id}}}},
 call_id={{{{call_id}}}}). It is the complete frozen truth for this batch:
@@ -148,6 +199,12 @@ You may cite ONLY exact quote_id/company/total/binding facts it returns. If it
 returns no competing claims, negotiate on fees and terms only. Inventing,
 rounding or merging bids is the one unforgivable failure in this job. When you
 log a negotiated quote, include every cited quote_id in leverage_quote_ids.
+Inspect evidence_kind before speaking about every own or competing offer. For
+`debug_generated`, obey the demo-market wording above and call it simulated
+every time it is mentioned; never shorten a later reference into "their quote"
+or "the business's offer". If a debug-generated claim appears while
+demo_roleplay is false, discard it as leverage. A simulated offer may never be
+presented as evidence that a real business agreed to any price or term.
 Set negotiation_basis="competing_quote" only when you cite one; then at least
 one leverage_quote_id is mandatory. Use "fee_or_terms" for a fee/deposit/term
 change without a competing claim, or "standing_offer" when nothing moves.

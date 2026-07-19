@@ -1,190 +1,300 @@
-# Demo run-of-show: safe scale preview + qualifying live proof
+# Demo run-of-show: document intake → first-batch explorer → automatic closer
 
-The demo has two deliberately separate tracks. Never describe debug transcripts as
-voice calls.
+This is one resettable hybrid job with one consenting human role-player and two
+real phone calls total.
 
-- **Track A — DEBUG / transcript-only:** shows real Google vendor discovery, all-vendor
-  coverage, deterministic quote extraction, sqrt batching, knowledge barriers,
-  learning, follow-ups, and reporting. It makes no phone call and creates no audio.
-- **Track B — LIVE qualifying demo:** ElevenLabs Caller/Closer reaches the one
-  allow-listed human phone through the imported Twilio number. This is the track that
-  can satisfy the challenge's live-conversation requirement.
+- Google Places supplies every displayed market identity.
+- One preselected Google identity is represented by the consenting human at the
+  server allow-listed demo destination. Its stored Google phone and place ID are
+  never changed or sent to the provider.
+- The imported Twilio source number ends in `5722`. It is the outbound
+  caller ID, not the destination.
+- The selected human belongs to **quote batch 1**. That first call explores the
+  scope and gathers an itemised quote; it does not negotiate.
+- All other vendors produce visibly labelled synthetic demo-market chats. Their
+  transcript turns and final quote use the same persistent Call ID.
+- After every quote batch crosses its hard barrier, the backend automatically
+  calls the same human once more with the final grounded knowledge snapshot.
+- The operator's one Start click explicitly authorizes those two calls. There is
+  no second frontend POST and no call loop.
 
-Use different jobs for the two tracks so synthetic debug quotes never become leverage
-in the qualifying live negotiation.
+Synthetic offers may be used only as explicitly disclosed **simulated
+demo-market offers**. Never say the named Google businesses were contacted or
+made those offers.
 
-## Verification status before rehearsal
+## What the demo proves
 
-Verified offline today:
+It proves the connected loop:
 
-- [x] Debug calls preserve real Google vendor identities but use no telephony,
-  ElevenLabs conversation, counter-agent, or audio.
-- [x] All eligible Google vendors are scheduled by default.
-- [x] `n` vendors use batches of `ceil(sqrt(n))`; 10 vendors execute as 4/4/2.
-- [x] A batch closes only after every member is terminal; peer calls share one frozen
-  snapshot and see no sibling result early.
-- [x] Every terminal call runs the learned-question pass and refreshes explainable
-  follow-up recommendations.
-- [x] Debug negotiation cites exact frozen quote IDs and only moves price when verified
-  leverage exists.
-- [x] A vendor can be recalled at most twice; the third attempt is rejected even under
-  concurrent or repeated requests.
-- [x] Only post-call grounded claims can enter the best-offer panel or recommendation.
+1. document intake;
+2. short browser voice completion;
+3. user review and confirmation;
+4. all-vendor square-root quote batching with progressive knowledge;
+5. one live exploratory quote from a consenting human;
+6. one live grounded negotiation after all quote barriers;
+7. real-time dashboard updates and an evidence-backed comparison.
 
-Still to prove live—leave these unchecked until the rehearsal artifacts exist:
+The synthetic rows prove orchestration, conversation design and structured
+evidence—not real calls to those Google businesses. Do not describe this one
+run as three live counterpart styles.
 
-- [ ] `/calls/demo` successfully rings the configured human phone through
-  Twilio + ElevenLabs and finalizes transcript plus MP3.
-- [ ] Three distinct live quote conversations are completed against three role-play
-  styles: stonewaller, lowballer, and upseller.
-- [ ] All three live calls end in structured outcomes with itemised comparable quotes
-  or an explicit callback/decline.
-- [ ] At least one live call includes an honest AI-disclosure/“are you a robot?” moment.
-- [ ] One live follow-up produces a measurable price or terms concession because of an
-  exact competing quote gathered in the earlier live calls.
-- [ ] The concession sentence is verified in the live transcript and its recording is
-  playable through the authenticated audio endpoint.
+## Preflight—no calls
 
-Passing the offline debug tests does not check any box in the second list.
+1. Keep `DEBUG_CALLS=true`. The prepared demo is a narrow exception that routes
+   only its preselected identity to `DEMO_PHONE_NUMBER`.
+2. Confirm `DEMO_PHONE_NUMBER` is the consenting human, while the ElevenLabs
+   imported Twilio number ending `5722` is selected by
+   `ELEVENLABS_PHONE_NUMBER_ID`.
+3. Confirm `ELEVENLABS_API_KEY`, `AGENT_TOOL_SECRET`, `PUBLIC_BASE_URL`, and the
+   public webhook route.
+4. Restart FastAPI after environment changes and run
+   `python -m agents.provision` after agent/tool/tunnel changes.
+5. Confirm authenticated `GET /api/runtime-config` returns:
+   `debug_mode=true`, `demo_phone_configured=true`,
+   `twilio_number_configured=true`, and
+   `demo_intake_pdf_url="/api/demo/intake-pdf"`.
+6. Confirm the Lovable API base is the current tunnel:
+   `https://travesti-championship-presented-machinery.trycloudflare.com`.
+7. Ensure no prior demo has active or leased work.
 
-## Preflight
+None of these checks starts a conversation or phone call.
 
-1. Keep `DEBUG_CALLS=true`; bulk discovery remains safe and `/calls/demo` still works as
-   the explicit exception.
-2. Set `DEMO_PHONE_NUMBER` to the authorized role-player's E.164 number in `.env`.
-3. Set `ELEVENLABS_PHONE_NUMBER_ID` to the Twilio number imported in ElevenLabs.
-4. Confirm `ELEVENLABS_API_KEY`, `AGENT_TOOL_SECRET`, `PUBLIC_BASE_URL`, and the public
-   webhook route. Leave `LIVE_VENDOR_CALLS_ENABLED=false` for the allow-listed demo.
-5. Restart FastAPI after `.env` changes and run `python -m agents.provision` after any
-   prompt/tool/tunnel change.
-6. Check `GET /api/runtime-config`: `debug_mode=true`,
-   `demo_phone_configured=true`, and `twilio_number_configured=true`.
-7. Create one confirmed **debug job** and a separate confirmed **live job**, both with
-   at least three Google vendors attached.
+## 0. Prepare a fresh unconfirmed job—no calls
 
-## 0. Hook — 20 seconds
+Run:
 
-“The real price is already in the market, but it is hidden behind phone calls nobody
-has time to make. QuoteWise builds one confirmed scope, asks every vendor the same
-questions, and negotiates without inventing leverage.”
-
-## 1. Intake — two doors, one confirmed spec — 50 seconds
-
-- Show the ElevenLabs Estimator interview asking a professional, domain-specific
-  question.
-- Upload a supported document and show extracted fields entering the same JSON spec.
-- Confirm the spec. Point out that edits reset confirmation and that the spec is hashed
-  and frozen when a call run begins.
-
-Criterion shown: voice/document intake converge on one user-confirmed specification.
-
-## 2. Track A: real market, safe all-vendor scale — 75 seconds
-
-On the **debug job**:
-
-1. Show the Google Places call list and promote it with
-   `POST /companies/from-call-list {}`. Explain that every callable Google vendor is
-   included; no top-three sampling occurs.
-2. Show the global debug banner from `/api/runtime-config`: real vendor identity,
-   synthetic labelled transcript, no dial, no ElevenLabs session, no audio.
-3. Start `POST /calls/start {"phase":"quote"}`.
-4. In the Calls header, show in real time:
-   - current risk-adjusted best offer;
-   - observed offer range;
-   - called/total;
-   - active batch and knowledge version.
-5. Explain the scheduler with the actual count: batch size is `ceil(sqrt(n))`. Calls in
-   one batch run concurrently, but the next batch cannot start until all are terminal.
-   Every peer receives the same frozen snapshot; only the next batch learns the newly
-   completed results.
-6. Open a transcript and its structured quote. Explicitly point to
-   `transcript_kind=debug_generated`; do not play or imply audio.
-7. Show a newly learned customer question and its call/company provenance. The backend
-   performs this pass even when the conversational agent forgets the tool.
-8. Open `/follow-ups`: reasons and source quote IDs are visible, but recommendations do
-   not dial automatically.
-
-This track proves safe orchestration and grounding, not the voice criterion.
-
-## 3. Track B: three qualifying live calls — 2 minutes
-
-Switch to the clean **live job**. The same authorized human answers every phone call but
-role-plays three distinct vendors; the selected Google records provide distinct vendor
-identities. No discovered business is dialled.
-
-For each selected `company_id`, invoke:
-
-```http
-POST /api/jobs/{job_id}/calls/demo
-{"company_id":"co_selected","phase":"quote"}
+```bash
+python -m negotiator.demo_reset
 ```
 
-Wait for each call to become terminal before starting the next demo beat.
-The endpoint uses a native one-recipient ElevenLabs batch; the destination remains
-server-side and a confirmed terminal provider state is required before knowledge moves.
+To choose a Google identity:
 
-1. **Stonewaller:** interrupt, initially refuse a phone quote, then give a structured
-   result only after hearing the complete confirmed scope.
-2. **Lowballer:** give a cheap anchor, evade itemisation, then reveal contingent fees
-   when the agent asks specifically.
-3. **Upseller:** bundle an unnecessary add-on and use pressure; let the agent separate
-   it from the comparable base scope.
-
-During at least one call, ask “Am I talking to a robot?” The agent must disclose
-honestly and return to the quote. After each call, verify outcome, line items,
-transcript, `has_audio=true`, and authenticated `audio_url`.
-
-Do not say these three styles have been demonstrated until all three live artifacts are
-present. They are not yet live-proven in the repository state documented today.
-
-## 4. The qualifying live negotiation — 60 seconds
-
-Choose the live vendor whose earlier offer can credibly move. Only after the three live
-quote calls have finalized, invoke:
-
-```http
-POST /api/jobs/{job_id}/calls/demo
-{"company_id":"co_target","phase":"negotiate"}
+```bash
+python -m negotiator.demo_reset --live-vendor "Exact Google vendor name"
 ```
 
-The Closer receives a frozen context containing:
+The command creates a new **unconfirmed** plumbing job with an empty spec,
+reuses the saved Google call list, promotes all callable Google vendors,
+preselects the human identity, enables automatic negotiation, and archives old
+demo jobs without deleting their evidence.
 
-- the target vendor's own verified quote history;
-- exact competing `quote_id`, company, total, and binding status;
-- the unchanged spec hash and benchmark.
+Do not use `--rediscover` unless a fresh market scan is intentionally wanted.
+Do not use `--wipe-learnings` during a normal run.
 
-The role-player grants a concession only after the Closer cites an exact lower live bid.
-State the initial and final total or changed term, then play the concession sentence from
-`GET /api/jobs/{job_id}/calls/{call_id}/audio`. In the report, show that the negotiated
-evidence is marked verified in transcript and cites the call/quote IDs.
+Refresh Lovable, open the returned `job_id`, and show that it is awaiting intake
+and confirmation.
 
-If the price or terms do not move, the challenge criterion is not met: do not substitute
-the deterministic debug concession or claim a successful negotiation.
-No vendor can be recalled more than twice; if both slots are consumed, use the existing
-evidence rather than attempting another call.
+## 1. Download and upload the scope PDF—30 seconds
 
-## 5. Report and close — 45 seconds
+On Intake click **Download the demo intake PDF**. Lovable fetches authenticated:
 
-- Show the ranked recommendation, itemised totals, initial → negotiated delta, binding
-  status, red flags, and explanation of why a suspicious cheap offer can rank lower.
-- Open evidence for both a debug row and a live row: debug is labelled and has no audio;
-  live has a verified transcript citation and playable recording.
-- Show a structured non-quote outcome if available: callback commitment, decline, or
-  hangup—not a vague summary.
-- Close on `verticals/plumbing.yaml`: changing market behavior is configuration, while
-  batching, grounding, honesty, learning, and evidence stay the same.
+```http
+GET /api/demo/intake-pdf
+```
+
+It downloads `QuoteWise-water-heater-intake.pdf`, served from the reproducible
+repository asset `assets/demo/water_heater_intake.pdf`.
+
+Drag that downloaded file into the normal document dropzone. This sends:
+
+```http
+POST /api/jobs/{job_id}/documents
+Content-Type: multipart/form-data
+```
+
+Show the parser filling the common structured spec. The document describes a
+40-gallon natural-gas water-heater replacement in a ground-floor Charlotte
+garage and intentionally leaves three quick confirmations:
+
+- urgency: this week or flexible;
+- whether the main water shutoff is known and operational;
+- a normal-hours weekday access window.
+
+The PDF is customer scope, not a vendor quote.
+
+## 2. Complete the short browser voice intake—under one minute
+
+Click **Start voice intake**. Lovable requests:
+
+```http
+POST /api/jobs/{job_id}/voice-session
+```
+
+Answer only the missing confirmations, for example:
+
+- service is needed this week;
+- the shutoff is known, accessible and operational;
+- a normal-hours weekday appointment works.
+
+The Estimator must acknowledge the document, avoid re-asking saved facts, merge
+only new answers, and finish. Show its browser transcript as it happens. When it
+disconnects, Lovable refetches the Job and form.
+
+## 3. Review and confirm—30 seconds
+
+Open Spec and show the one structured scope built by document + voice. Point out
+that every vendor receives this exact confirmed scope.
+
+Confirm with:
+
+```http
+POST /api/jobs/{job_id}/confirm
+```
+
+Confirmation does not start calls. Any later spec change makes it unconfirmed
+again.
+
+On Call list show all real Google identities and the one row marked
+**Consenting human role-play · batch 1**. The saved business number will not be
+dialled.
+
+## 4. Explicitly authorize and start—one deliberate click
+
+On Calls, read the consent before checking it:
+
+> I authorize QuoteWise to make two real calls to the configured demo
+> role-player: an exploratory quote call in the first batch and one automatic
+> negotiation callback after all quote batches finish. No Google business will
+> be called.
+
+Then submit one fresh idempotency key:
+
+```http
+POST /api/jobs/{job_id}/calls/start
+Content-Type: application/json
+
+{
+  "phase": "quote",
+  "idempotency_key": "<fresh UUID>",
+  "authorize_demo_calls": true
+}
+```
+
+Do not send `company_ids`, `parallel`, a phone number or a negotiation request.
+The prepared demo is rejected without `authorize_demo_calls=true`.
+
+The response exposes:
+
+- `total`: N quote vendors;
+- `total_calls`: N+1 including the callback;
+- `batch_size`: `ceil(sqrt(N))`;
+- `quote_batch_count`;
+- `batch_count`: quote batches plus the callback;
+- `auto_negotiation_batch`: the final batch index;
+- `auto_negotiation_status=waiting_for_quote_batches`;
+- `demo_calls_authorized=true`.
+
+## 5. First batch: live exploratory quote + streaming market
+
+Answer when the selected target enters `calling` in **batch 1**. The Caller must:
+
+1. disclose it is an AI calling for a customer;
+2. disclose the recorded human role-play and that you do not represent the real
+   Google-listed business;
+3. describe the confirmed job consistently;
+4. ask exploratory questions about scope assumptions, inclusions and exclusions;
+5. request labour, equipment, materials, permit, disposal and warranty as
+   separate line items;
+6. confirm all-in total, binding status, deposit and validity;
+7. avoid every concession, price-match or competing-offer question.
+
+Give a plausible, itemised initial offer, but do not make it the final winner yet.
+The first-batch frozen snapshot contains no later peer knowledge.
+
+While speaking, show the other batch rows. Synthetic Call records update one turn
+at a time with:
+
+- `transcript_streaming=true`;
+- increasing `transcript_turn_count`;
+- `last_transcript_at` and the latest turn preview.
+
+The Quote appears only after that same Call becomes terminal and references its
+exact `call_id`. The UI never writes a provisional quote.
+
+At the top, show backend-authoritative current best, observed range, and
+called/total. Show batch progress and knowledge version. The next quote batch
+cannot begin until every first-batch call—including the live human—terminates.
+
+## 6. Hard quote barriers and progressive knowledge
+
+As each later synthetic batch runs, open two transcript drawers and show distinct
+vendor behavior. Say explicitly:
+
+“These are generated demo conversations attached to real Google market identities.
+Those businesses were not contacted, and no audio exists.”
+
+At each complete barrier:
+
+- the batch becomes terminal;
+- structured quotes become visible;
+- best/range/called update from server evidence;
+- learned intake questions persist with call/company provenance;
+- the knowledge version advances once;
+- only then does the next batch start.
+
+Do not claim same-batch information was available early.
+
+## 7. Automatic live negotiation callback—normally within one minute
+
+After the final quote barrier, do **not** click or POST anything. The same durable
+run creates the callback as `auto_negotiation_batch`, with:
+
+- `phase=negotiate`;
+- `auto_negotiation=true`;
+- the same selected `company_id`;
+- `mode=demo_phone`;
+- `dialed_to=configured_demo_phone`;
+- `recall_slot=1`.
+
+Lovable shows `waiting_for_quote_batches → running → completed/failed` and an
+observational “expected within one minute” timer. If delayed, it keeps polling and
+never redials.
+
+Answer the second call. The Closer must repeat the AI and role-play disclosure,
+then negotiate using exact grounded database claims. Any synthetic claim must be
+phrased in the same sentence as:
+
+> a simulated demo-market offer labelled [company] at $X
+
+It must not say that the named Google business quoted or promised that amount.
+Respond with a lower itemised all-in offer after the agent makes a sensible,
+grounded ask. Restate the final total, binding status, deposit, validity and any
+waived fee clearly.
+
+## 8. Show the verified result—45 seconds
+
+After the call terminalizes:
+
+- show initial → negotiated total and savings on the same vendor row;
+- open the exact concession and leverage IDs in the transcript;
+- play authenticated audio for the two live role-play attempts;
+- show the sticky best/range/called update;
+- open Compare and show ranking, itemisation, red flags and evidence.
+
+Celebrate **New best offer, verified in the live negotiation** only if the server's
+`summary.current_best_offer.company_id` is the selected role-player and the
+negotiated quote is evidence-, grounding- and itemisation-verified. Otherwise show
+the honest actual winner.
+
+State plainly: only the allow-listed consenting human was dialled; no Google
+business received a call.
 
 ## Failure modes to rehearse
 
-- **Demo phone does not ring:** verify both phone settings, ElevenLabs phone import,
-  tunnel reachability, and re-provisioned webhook URLs. Do not fall back to claiming a
-  debug transcript was live.
-- **Call finalizes without audio:** keep the transcript/outcome, state the failure
-  honestly, and leave the audio proof box unchecked.
-- **No concession:** run a fresh live negotiation only when a lower verified live quote
-  exists; never invent or use a debug bid on the qualifying job.
-- **Agent omits outcome or learning tool:** the finalizer supplies a structured fallback
-  outcome and always runs the backend learning pass; disclose that it was inferred.
-- **Batch stalls:** inspect `call_runs`, `call_batches`, recipient status, and configured
-  timeout. Never advance the knowledge version manually.
-- **Tunnel changed:** update `PUBLIC_BASE_URL`, restart the API, and re-run provisioning.
+- **PDF unavailable:** verify authenticated `GET /api/demo/intake-pdf`; do not
+  fabricate form values.
+- **Parsing fails:** show the server detail and retry the same file deliberately.
+- **Voice unavailable:** verify microphone permission, Estimator provisioning and
+  tunnel. Do not mark intake complete.
+- **Start rejected:** confirm the spec and explicit two-call checkbox; verify both
+  phone configuration flags. Do not bypass `authorize_demo_calls`.
+- **Target does not ring:** verify the allow-listed destination, imported Twilio
+  source, API key, tunnel and provisioned agents. Do not use a Google phone.
+- **Initial live quote is unverified:** automatic negotiation stays blocked. Report
+  it honestly and prepare a fresh demo only after active work is terminal.
+- **Callback delayed:** keep polling; no client POST, no automatic retry.
+- **Provider state uncertain:** automatic redial remains locked until reconciled.
+- **No concession:** show the actual result; never invent movement.
+- **Audio missing:** retain transcript/evidence but never claim recording proof.
+- **Tunnel changes:** update the one Lovable `API_BASE`, restart FastAPI and
+  re-provision agents.

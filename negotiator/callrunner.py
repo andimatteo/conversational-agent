@@ -48,6 +48,16 @@ def _latest(rows: list[dict], field: str = "created_at") -> dict | None:
     return sorted(rows, key=lambda row: row.get(field, ""))[-1] if rows else None
 
 
+def _demo_mode(job: dict | None) -> dict:
+    mode = (job or {}).get("demo_mode")
+    return mode if (
+        isinstance(mode, dict)
+        and mode.get("roleplay")
+        and mode.get("active")
+        and not (job or {}).get("archived")
+    ) else {}
+
+
 def _advance_knowledge(job_id: str) -> tuple[int, list[dict]]:
     """Publish a new job knowledge version atomically, then attach the plan
     only if no other worker advanced the version while it was computed."""
@@ -109,6 +119,8 @@ def sync_google_companies(job_id: str) -> list[dict]:
             address=item.get("address") or item.get("city", ""),
             discovery_sources=item.get("sources", []),
             external_ids=item.get("source_ids", {}),
+            demo_roleplay=bool((current or {}).get("demo_roleplay", False)),
+            demo_alias=(current or {}).get("demo_alias", ""),
         ).model_dump()
         db.put("companies", payload["id"], payload, job_id=job_id)
         by_phone[payload["phone"]] = payload
@@ -123,10 +135,11 @@ def sync_google_companies(job_id: str) -> list[dict]:
 
 def queue_state(job_id: str) -> dict:
     """Realtime board payload: rows, risk-adjusted best, range and batch state."""
+    job = db.get("jobs", job_id) or {}
     calls = db.where("calls", job_id=job_id)
     quotes = db.where("quotes", job_id=job_id)
     companies = db.where("companies", job_id=job_id)
-    plans = {p["company_id"]: p for p in (db.get("jobs", job_id) or {}).get("follow_up_plan", [])}
+    plans = {p["company_id"]: p for p in job.get("follow_up_plan", [])}
     from .recall_limits import for_company as recall_reservations_for_company
     rows = []
     for company in companies:
@@ -148,6 +161,14 @@ def queue_state(job_id: str) -> dict:
             status = "queued"
         else:
             status = "to_call"
+        transcript = (latest_call or {}).get("transcript", [])
+        latest_turn = transcript[-1] if isinstance(transcript, list) and transcript else None
+        if not isinstance(latest_turn, dict):
+            latest_turn = None
+        turn_preview = ({
+            "role": str(latest_turn.get("role", ""))[:32],
+            "text": str(latest_turn.get("text", ""))[:240],
+        } if latest_turn else None)
         rows.append({
             "company": {
                 "id": company["id"], "name": company["name"],
@@ -168,6 +189,12 @@ def queue_state(job_id: str) -> dict:
             "knowledge_version": (latest_call or {}).get("knowledge_version"),
             "dial_mode": (latest_call or {}).get("mode", ""),
             "transcript_kind": (latest_call or {}).get("transcript_kind", ""),
+            "transcript_streaming": bool((latest_call or {}).get("transcript_streaming")),
+            "transcript_turn_count": int((latest_call or {}).get(
+                "transcript_turn_count", len(transcript) if isinstance(transcript, list) else 0
+            )),
+            "last_transcript_at": (latest_call or {}).get("last_transcript_at", ""),
+            "last_transcript_turn": turn_preview,
             "follow_up": plans.get(company["id"]),
         })
 
@@ -194,9 +221,9 @@ def queue_state(job_id: str) -> dict:
     candidates = safe or final_offers
     best = min(candidates, key=lambda q: q["total"]) if candidates else None
     company_map = {c["id"]: c for c in companies}
+    call_map = {call["id"]: call for call in calls}
     totals = [q["total"] for q in final_offers]
     benchmark_range = None
-    job = db.get("jobs", job_id)
     if job and job.get("spec"):
         try:
             from .benchmarks import market_range
@@ -233,8 +260,27 @@ def queue_state(job_id: str) -> dict:
     ) or any(row["status"] in {"queued", "calling"} for row in rows)
     return {
         "debug_mode": config.DEBUG_CALLS,
-        "debug_behavior": "transcript_only" if config.DEBUG_CALLS else "voice_and_telephony",
+        "debug_behavior": ("hybrid_demo_roleplay" if _demo_mode(job) else
+                           ("transcript_only" if config.DEBUG_CALLS else
+                            "voice_and_telephony")),
         "running": running,
+        "demo_mode": ({
+            "roleplay": True,
+            "session_id": _demo_mode(job).get("session_id", ""),
+            "live_company_id": _demo_mode(job).get("live_company_id", ""),
+            "live_company_name": _demo_mode(job).get("live_company_name", ""),
+            "auto_negotiate": bool(_demo_mode(job).get("auto_negotiate")),
+            "quote_batch_count": (run or {}).get("quote_batch_count"),
+            "auto_negotiation_batch": (run or {}).get("auto_negotiation_batch"),
+            "auto_negotiation_status": (run or {}).get("auto_negotiation_status",
+                                                          "not_started"),
+            "demo_calls_authorized": bool((run or {}).get("demo_calls_authorized")),
+            "destination": "configured_demo_phone",
+            "notice": (
+                "One Google lead is routed to the allow-listed human. Other offers are "
+                "synthetic demo-market data and must be described as simulated."
+            ),
+        } if _demo_mode(job) else None),
         "summary": {
             "current_best_offer": ({
                 "company_id": best["company_id"],
@@ -242,6 +288,12 @@ def queue_state(job_id: str) -> dict:
                 "quote_id": best["id"], "total": best["total"],
                 "binding": best.get("binding", False),
                 "red_flags": best.get("red_flags", []),
+                "evidence_kind": best.get("evidence_kind", ""),
+                "synthetic": best.get("evidence_kind") == "debug_generated",
+                "demo_roleplay": bool(
+                    best.get("evidence_kind") == "demo_roleplay_voice"
+                    or call_map.get(best.get("call_id", ""), {}).get("demo_roleplay")
+                ),
             } if best else None),
             "offer_range": ({"low": min(totals), "high": max(totals), "count": len(totals)}
                             if totals else None),
@@ -255,7 +307,12 @@ def queue_state(job_id: str) -> dict:
             "run_id": run.get("id"),
             "index": active_batch.get("index") if active_batch else None,
             "count": run.get("batch_count"),
-            "size": run.get("batch_size"),
+            "quote_batch_count": run.get("quote_batch_count", run.get("batch_count")),
+            "auto_negotiation_batch": run.get("auto_negotiation_batch"),
+            "auto_negotiation_status": run.get("auto_negotiation_status", "not_requested"),
+            "phase": (active_batch or {}).get("phase", run.get("phase")),
+            "size": (len(active_batch.get("company_ids", []))
+                     if active_batch else run.get("batch_size")),
             "status": active_batch.get("status") if active_batch else run.get("status"),
             "knowledge_version": (active_batch or {}).get("knowledge_version",
                                                             run.get("knowledge_version", 0)),
@@ -270,12 +327,15 @@ def queue_state(job_id: str) -> dict:
 def start_calls(job_id: str, phase: str, company_ids: list[str] | None = None,
                 parallel: bool | None = None, retry_completed: bool = False,
                 recommended_only: bool = False,
-                idempotency_key: str | None = None) -> dict:
+                idempotency_key: str | None = None,
+                authorize_demo_calls: bool = False) -> dict:
     """Start a background run.  ``parallel`` is accepted for old clients but
     ignored: concurrency is always the server-computed sqrt(n) policy."""
     job = db.get("jobs", job_id)
     if not job:
         raise LookupError("job not found")
+    if job.get("archived"):
+        raise RuntimeError("Archived jobs are read-only. Reset the demo to create a fresh job.")
     if idempotency_key:
         from .runclaims import claim_run, find_idempotent_run, finish_run
         replay = find_idempotent_run(job_id, idempotency_key)
@@ -307,8 +367,19 @@ def start_calls(job_id: str, phase: str, company_ids: list[str] | None = None,
                 "The prior idempotent run expired; automatic redial was suppressed. "
                 "Inspect outcomes, then retry explicitly with a new idempotency_key."
             )
+    demo = _demo_mode(job)
+    if demo and not authorize_demo_calls:
+        raise RuntimeError(
+            "This prepared demo places two calls to the allow-listed role-player. "
+            "Start it only after explicit confirmation with authorize_demo_calls=true."
+        )
     google = sync_google_companies(job_id)
     companies = google or db.where("companies", job_id=job_id)
+    if demo and phase != "quote":
+        raise RuntimeError(
+            "Prepared demo runs start in quote phase; the grounded negotiation "
+            "callback is appended automatically after every quote barrier."
+        )
     # Initial Google-market coverage is deliberately all-or-nothing: a client
     # cannot accidentally reintroduce top-N sampling. Explicit subsets are
     # reserved for negotiation or an intentional retry.
@@ -327,6 +398,26 @@ def start_calls(job_id: str, phase: str, company_ids: list[str] | None = None,
         called = {c["company_id"] for c in db.where("calls", job_id=job_id)
                   if c.get("kind") == "quote" and c.get("ended_at")}
         companies = [c for c in companies if c["id"] not in called]
+    if demo:
+        if not job.get("documents") or "document" not in job.get("spec_source", ""):
+            raise RuntimeError(
+                "Prepared demo intake is incomplete: upload the supplied document first."
+            )
+        if "interview" not in job.get("spec_source", ""):
+            raise RuntimeError(
+                "Prepared demo intake is incomplete: finish the short voice interview first."
+            )
+        target_id = demo.get("live_company_id", "")
+        target = next((company for company in companies if company["id"] == target_id), None)
+        if not target:
+            raise LookupError(
+                "The configured live demo vendor is not eligible. Reset the demo session "
+                "instead of retrying or changing the target mid-run."
+            )
+        # The exploratory human call belongs to batch one.  The callback is a
+        # separate final batch created only after every quote batch has crossed
+        # its barrier and published its knowledge.
+        companies = [target] + [company for company in companies if company["id"] != target_id]
     if not companies:
         raise LookupError("No eligible companies" +
                           (" (gather quotes before negotiating)." if phase == "negotiate"
@@ -421,26 +512,40 @@ def start_calls(job_id: str, phase: str, company_ids: list[str] | None = None,
         )
     size = computed_batch_size(len(companies))
     chunks = _chunks(companies, size)
+    auto_negotiate = bool(demo and demo.get("auto_negotiate"))
+    quote_batch_count = len(chunks)
+    auto_negotiation_batch = quote_batch_count + 1 if auto_negotiate else None
     frozen_spec = json.loads(json.dumps(job.get("spec", {})))
     try:
         initial_snapshot = create_snapshot(
             job_id, int(job.get("knowledge_version", 0)),
-            allow_debug_leverage=config.DEBUG_CALLS,
+            allow_debug_leverage=bool(config.DEBUG_CALLS or demo),
         )
     except Exception:
         finish_run(job_id, run_id, claim.owner_token, "failed")
         raise
     run = {
         "id": run_id, "job_id": job_id, "phase": phase,
-        "status": "queued", "mode": "debug_transcript" if config.DEBUG_CALLS else "voice",
+        "status": "queued",
+        "mode": ("demo_roleplay" if demo else
+                 ("debug_transcript" if config.DEBUG_CALLS else "voice")),
         "company_ids": [c["id"] for c in companies],
         "total": len(companies), "completed": 0,
-        "batch_size": size, "batch_count": len(chunks),
+        "total_calls": len(companies) + int(auto_negotiate),
+        "quote_total": len(companies), "quote_completed": 0,
+        "batch_size": size,
+        "quote_batch_count": quote_batch_count,
+        "batch_count": quote_batch_count + int(auto_negotiate),
+        "auto_negotiation_batch": auto_negotiation_batch,
+        "auto_negotiation_status": ("waiting_for_quote_batches"
+                                    if auto_negotiate else "not_requested"),
+        "demo_calls_authorized": bool(demo and authorize_demo_calls),
         "knowledge_version": int(job.get("knowledge_version", 0)),
         "spec": frozen_spec, "spec_hash": spec_hash(frozen_spec),
         "document_offers": [offer for offer in initial_snapshot.get("offers", [])
                             if offer.get("phase") == "document"],
         "recall_reservations": recall_reservations,
+        "demo_mode": json.loads(json.dumps(demo)) if demo else {},
         "created_at": now(),
     }
     run["idempotency_key"] = idempotency_key or ""
@@ -462,8 +567,18 @@ def start_calls(job_id: str, phase: str, company_ids: list[str] | None = None,
     return {
         "started": True, "run_id": run_id, "phase": phase,
         "debug_mode": config.DEBUG_CALLS, "batch_size": size,
-        "batch_count": len(chunks), "total": len(companies),
+        "batch_count": quote_batch_count + int(auto_negotiate),
+        "quote_batch_count": quote_batch_count,
+        "auto_negotiation_batch": auto_negotiation_batch,
+        "auto_negotiation_status": ("waiting_for_quote_batches"
+                                    if auto_negotiate else "not_requested"),
+        "total": len(companies),
+        "total_calls": len(companies) + int(auto_negotiate),
         "companies": [{"id": c["id"], "name": c["name"]} for c in companies],
+        "demo_roleplay": bool(demo),
+        "live_company_id": demo.get("live_company_id", "") if demo else "",
+        "live_destination": "configured_demo_phone" if demo else "",
+        "demo_calls_authorized": bool(demo and authorize_demo_calls),
     }
 
 
@@ -476,11 +591,33 @@ def _idempotent_run_response(run_id: str, fallback_phase: str, claim_status: str
         "debug_mode": config.DEBUG_CALLS,
         "batch_size": existing.get("batch_size"),
         "batch_count": existing.get("batch_count"),
+        "quote_batch_count": existing.get("quote_batch_count", existing.get("batch_count")),
+        "auto_negotiation_batch": existing.get("auto_negotiation_batch"),
+        "auto_negotiation_status": existing.get("auto_negotiation_status", "not_requested"),
         "total": existing.get("total"),
+        "total_calls": existing.get("total_calls", existing.get("total")),
     }
 
 
 def _validate_runtime(job: dict, companies: list[dict]):
+    demo = _demo_mode(job)
+    if demo:
+        target_id = demo.get("live_company_id", "")
+        target = next((company for company in companies if company["id"] == target_id), None)
+        if not target or target.get("source") != "google_places" \
+                or not target.get("external_ids", {}).get("google_places"):
+            raise RuntimeError("Demo target must be a real Google Places lead on this job.")
+        if not config.DEMO_PHONE_NUMBER:
+            raise RuntimeError("DEMO_PHONE_NUMBER missing — the role-play destination is not configured.")
+        if not config.ELEVENLABS_PHONE_NUMBER_ID:
+            raise RuntimeError("ELEVENLABS_PHONE_NUMBER_ID missing — import the Twilio number first.")
+        if not config.ELEVENLABS_API_KEY or not config.registry_path().exists():
+            raise RuntimeError("ElevenLabs is not configured/provisioned for the demo role-play.")
+        _validate_agent_registry(job)
+        # LIVE_VENDOR_CALLS_ENABLED is intentionally irrelevant here: every
+        # non-target lead is transcript-only and the sole phone destination is
+        # the server-side allow-listed human.
+        return
     if config.DEBUG_CALLS:
         return
     if not config.ELEVENLABS_API_KEY:
@@ -501,11 +638,19 @@ def _validate_agent_registry(job: dict):
     if not config.registry_path().exists():
         raise RuntimeError("Agents not provisioned — run `python -m agents.provision`.")
     registry = json.loads(config.registry_path().read_text())
-    provisioned_vertical = registry.get("meta", {}).get("vertical", "")
+    meta = registry.get("meta", {})
+    provisioned_vertical = meta.get("vertical", "")
     if provisioned_vertical != job.get("vertical"):
         raise RuntimeError(
             f"Live agents are provisioned for {provisioned_vertical or 'an unknown legacy vertical'}, "
             f"not {job.get('vertical')}. Set VERTICAL and re-run `python -m agents.provision`."
+        )
+    from agents import prompts
+    if meta.get("schema_version") != prompts.PROMPT_SCHEMA_VERSION \
+            or meta.get("prompt_revision") != prompts.prompt_revision():
+        raise RuntimeError(
+            "Live agent prompts are stale or unverifiable. Re-run `python -m agents.provision` "
+            "before authorising telephony."
         )
 
 
@@ -527,7 +672,7 @@ def _execute_run(run_id: str, chunks: list[list[dict]], owner_token: str,
             # Offers are refreshed; the job spec stays frozen for the entire run.
             snapshot = create_snapshot(
                 job_id, run["knowledge_version"],
-                allow_debug_leverage=config.DEBUG_CALLS,
+                allow_debug_leverage=bool(config.DEBUG_CALLS or run.get("demo_mode")),
             )
             snapshot["offers"] = ([offer for offer in snapshot.get("offers", [])
                                    if offer.get("phase") != "document"]
@@ -542,23 +687,41 @@ def _execute_run(run_id: str, chunks: list[list[dict]], owner_token: str,
             batch = {
                 "id": batch_id, "run_id": run_id, "job_id": job_id,
                 "index": index, "status": "running", "company_ids": [c["id"] for c in companies],
+                "phase": run["phase"], "quote_batch": True,
+                "quote_batch_count": run.get("quote_batch_count", len(chunks)),
                 "knowledge_version": run["knowledge_version"], "knowledge_snapshot": snapshot,
                 "completed": 0, "created_at": now(), "started_at": now(),
             }
             db.put("call_batches", batch_id, batch, job_id=job_id, run_id=run_id)
             call_rows = []
             for company in companies:
-                mode = _mode_for(company)
+                mode = _mode_for(company, run)
                 call_id = db.new_id("call")
                 attempts = len(db.where("calls", job_id=job_id, company_id=company["id"])) + 1
+                context = context_for(snapshot, company["id"])
+                demo_roleplay = bool(run.get("demo_mode"))
                 call = {
                     "id": call_id, "job_id": job_id, "company_id": company["id"],
                     "kind": run["phase"], "run_id": run_id, "batch_id": batch_id,
                     "batch_index": index, "knowledge_version": snapshot["version"],
-                    "knowledge_snapshot": context_for(snapshot, company["id"]),
+                    "knowledge_snapshot": context,
                     "spec_hash": run["spec_hash"], "attempt_number": attempts,
                     "mode": mode, "status": "queued", "created_at": now(),
                 }
+                execution_company = company
+                if demo_roleplay:
+                    call.update({
+                        "demo_roleplay": True,
+                        "demo_session_id": run["demo_mode"].get("session_id", ""),
+                        "counterparty_setup": ("human_roleplay" if mode == "demo_phone"
+                                               else "synthetic_transcript"),
+                    })
+                if mode == "demo_phone":
+                    # The Google company record remains byte-for-byte the
+                    # market identity. Only this ephemeral transport copy is
+                    # routed to the consenting allow-listed human.
+                    execution_company = {**company, "phone": config.DEMO_PHONE_NUMBER}
+                    call["dialed_to"] = "configured_demo_phone"
                 recall = run.get("recall_reservations", {}).get(company["id"])
                 if recall:
                     call["recall_reservation_id"] = recall["reservation_id"]
@@ -569,7 +732,7 @@ def _execute_run(run_id: str, chunks: list[list[dict]], owner_token: str,
                     if not attach_call(job_id, company["id"], recall["reservation_id"],
                                        call_id, status="queued"):
                         raise RuntimeError("Recall reservation disappeared before call creation.")
-                call_rows.append((call, company))
+                call_rows.append((call, execution_company))
             batch_error = None
             try:
                 _execute_batch(call_rows, batch)
@@ -600,6 +763,7 @@ def _execute_run(run_id: str, chunks: list[list[dict]], owner_token: str,
 
             run = db.get("call_runs", run_id)
             run["completed"] = run.get("completed", 0) + batch["completed"]
+            run["quote_completed"] = run.get("quote_completed", 0) + batch["completed"]
             new_version, _ = _advance_knowledge(job_id)
             run["knowledge_version"] = new_version
             db.put("call_runs", run_id, run, job_id=job_id)
@@ -607,6 +771,12 @@ def _execute_run(run_id: str, chunks: list[list[dict]], owner_token: str,
                 raise RuntimeError("Call-run ownership was lost after the batch barrier.")
             if batch_error is not None:
                 raise batch_error
+
+        run = db.get("call_runs", run_id)
+        if run.get("auto_negotiation_batch"):
+            run["quote_barrier_completed_at"] = now()
+            db.put("call_runs", run_id, run, job_id=job_id)
+            _execute_auto_demo_negotiation(run_id, owner_token, lease_seconds)
 
         run = db.get("call_runs", run_id)
         finished_batches = [b for b in db.where("call_batches", job_id=job_id)
@@ -622,6 +792,11 @@ def _execute_run(run_id: str, chunks: list[list[dict]], owner_token: str,
         run["status"] = "failed"
         run["error"] = f"{type(exc).__name__}: {exc}"
         run["ended_at"] = now()
+        if run.get("auto_negotiation_batch") and run.get("auto_negotiation_status") \
+                in {"waiting_for_quote_batches", "running"}:
+            run["auto_negotiation_status"] = "failed"
+            run["auto_negotiation_ended_at"] = run["ended_at"]
+            run["auto_negotiation_error"] = str(exc)[:300]
         db.put("call_runs", run_id, run, job_id=job_id)
         _fail_unfinished(job_id, run_id, str(exc))
     finally:
@@ -630,7 +805,171 @@ def _execute_run(run_id: str, chunks: list[list[dict]], owner_token: str,
         _runs.pop(job_id, None)
 
 
-def _mode_for(company: dict) -> str:
+def _execute_auto_demo_negotiation(run_id: str, owner_token: str,
+                                   lease_seconds: float) -> None:
+    """Append the authorised live callback as the final batch of a quote run.
+
+    This deliberately reuses the quote run's durable lease.  It is therefore
+    impossible for another scheduler to enter between the final quote barrier
+    and the callback snapshot.  The callback is created only after all quote
+    calls are terminal and the last quote knowledge version has been
+    published.
+    """
+    from .runclaims import heartbeat_run
+    from .recall_limits import attach_call, reserve as reserve_recall
+
+    run = db.get("call_runs", run_id)
+    if not run:
+        raise RuntimeError("Demo run disappeared before its automatic negotiation.")
+    job_id = run["job_id"]
+    demo = run.get("demo_mode") or {}
+    if not (demo.get("roleplay") and demo.get("auto_negotiate")):
+        return
+    if not run.get("demo_calls_authorized"):
+        raise RuntimeError("Automatic demo callback lacks explicit operator authorisation.")
+    if not heartbeat_run(job_id, run_id, owner_token, stale_after=lease_seconds):
+        raise RuntimeError("Call-run ownership was lost before the automatic callback.")
+
+    quote_calls = [
+        call for call in db.where("calls", job_id=job_id)
+        if call.get("run_id") == run_id and call.get("kind") == "quote"
+    ]
+    if len(quote_calls) != int(run.get("quote_total", run.get("total", 0))) or any(
+            call.get("status") not in TERMINAL_CALL_STATUSES for call in quote_calls):
+        raise RuntimeError(
+            "Automatic negotiation is blocked until every quote call is terminal."
+        )
+
+    target_id = demo.get("live_company_id", "")
+    company = db.get("companies", target_id)
+    if not company or company.get("source") != "google_places" \
+            or not company.get("external_ids", {}).get("google_places"):
+        raise RuntimeError("The preselected Google demo target is no longer available.")
+    target_quote = next((
+        quote for quote in reversed(sorted(
+            db.where("quotes", job_id=job_id, company_id=target_id),
+            key=lambda row: row.get("created_at", ""),
+        ))
+        if quote.get("phase") == "initial"
+        and quote.get("evidence_verified")
+        and quote.get("grounding_verified")
+        and quote.get("itemization_verified") is True
+        and quote.get("evidence_kind") != "debug_generated"
+    ), None)
+    if not target_quote:
+        raise RuntimeError(
+            "The exploratory role-player call produced no verified itemised quote; "
+            "automatic negotiation is blocked."
+        )
+
+    version = int(run.get("knowledge_version", 0))
+    snapshot = create_snapshot(job_id, version, allow_debug_leverage=True)
+    snapshot["offers"] = ([offer for offer in snapshot.get("offers", [])
+                           if offer.get("phase") != "document"]
+                          + run.get("document_offers", []))
+    snapshot["spec"] = run["spec"]
+    snapshot["spec_hash"] = run["spec_hash"]
+    job = db.get("jobs", job_id) or {}
+    pack = load_pack(job.get("vertical", "moving"), job.get("area_code", ""))
+    from .benchmarks import market_range
+    snapshot["benchmark"] = market_range(run["spec"], pack)
+    context = context_for(snapshot, target_id)
+    if not context.get("allowed_competitive_claims"):
+        raise RuntimeError(
+            "No grounded competing demo-market offer exists after the quote barrier."
+        )
+
+    batch_index = int(run["auto_negotiation_batch"])
+    reservation_id = f"{run_id}:{target_id}:auto-negotiate"
+    slot = reserve_recall(
+        job_id, target_id, reservation_id,
+        max_recalls=config.MAX_VENDOR_RECALLS,
+        status="reserved",
+        metadata={"run_id": run_id, "phase": "negotiate", "automatic": True},
+    )
+    if slot is None:
+        raise RuntimeError(
+            f"Automatic callback blocked by the hard limit of {config.MAX_VENDOR_RECALLS} recalls."
+        )
+
+    batch_id = db.new_id("batch")
+    call_id = db.new_id("call")
+    batch = {
+        "id": batch_id, "run_id": run_id, "job_id": job_id,
+        "index": batch_index, "status": "running", "company_ids": [target_id],
+        "phase": "negotiate", "auto_negotiation": True,
+        "quote_batch_count": run.get("quote_batch_count"),
+        "knowledge_version": version, "knowledge_snapshot": snapshot,
+        "completed": 0, "created_at": now(), "started_at": now(),
+    }
+    call = {
+        "id": call_id, "job_id": job_id, "company_id": target_id,
+        "kind": "negotiate", "run_id": run_id, "batch_id": batch_id,
+        "batch_index": batch_index, "knowledge_version": version,
+        "knowledge_snapshot": context, "spec_hash": run["spec_hash"],
+        "attempt_number": len(db.where("calls", job_id=job_id,
+                                        company_id=target_id)) + 1,
+        "mode": "demo_phone", "status": "queued", "created_at": now(),
+        "dialed_to": "configured_demo_phone", "demo_roleplay": True,
+        "demo_session_id": demo.get("session_id", ""),
+        "counterparty_setup": "human_roleplay", "auto_negotiation": True,
+        "recall_reservation_id": reservation_id, "recall_slot": slot,
+    }
+    run["auto_negotiation_status"] = "running"
+    run["auto_negotiation_started_at"] = now()
+    run["auto_negotiation_call_id"] = call_id
+    run["auto_negotiation_batch_id"] = batch_id
+    run.setdefault("recall_reservations", {})[target_id] = {
+        "reservation_id": reservation_id, "slot": slot,
+    }
+    db.put("call_runs", run_id, run, job_id=job_id)
+    db.put("call_batches", batch_id, batch, job_id=job_id, run_id=run_id)
+    db.put("calls", call_id, call, job_id=job_id, company_id=target_id)
+    if not attach_call(job_id, target_id, reservation_id, call_id, status="queued"):
+        raise RuntimeError("Automatic recall reservation disappeared before call creation.")
+    _queued.setdefault(job_id, set()).add(target_id)
+
+    batch_error = None
+    try:
+        # Never pass the stored Google phone across the provider boundary.
+        destination = {**company, "phone": config.DEMO_PHONE_NUMBER}
+        _execute_batch([(call, destination)], batch)
+    except Exception as exc:
+        batch_error = exc
+
+    terminal = db.get("calls", call_id) or {}
+    batch = db.get("call_batches", batch_id) or batch
+    batch.update({
+        "completed": int(terminal.get("status") in TERMINAL_CALL_STATUSES),
+        "succeeded": int(terminal.get("status") == "completed"),
+        "failed": int(terminal.get("status") == "failed"),
+        "status": "completed" if terminal.get("status") == "completed" else "failed",
+        "ended_at": now(),
+    })
+    db.put("call_batches", batch_id, batch, job_id=job_id, run_id=run_id)
+    new_version, _ = _advance_knowledge(job_id)
+    run = db.get("call_runs", run_id)
+    run["completed"] = run.get("completed", 0) + batch["completed"]
+    run["knowledge_version"] = new_version
+    run["auto_negotiation_status"] = (
+        "completed" if terminal.get("status") == "completed" else "failed"
+    )
+    run["auto_negotiation_ended_at"] = now()
+    db.put("call_runs", run_id, run, job_id=job_id)
+    if not heartbeat_run(job_id, run_id, owner_token, stale_after=lease_seconds):
+        raise RuntimeError("Call-run ownership was lost after the automatic callback barrier.")
+    if batch_error is not None:
+        raise batch_error
+    if terminal.get("status") != "completed":
+        raise RuntimeError("Automatic demo negotiation did not complete successfully.")
+
+
+def _mode_for(company: dict, run: dict | None = None) -> str:
+    demo = (run or {}).get("demo_mode") or {}
+    if demo:
+        if company.get("id") == demo.get("live_company_id"):
+            return "demo_phone"
+        return "debug_transcript"
     if config.DEBUG_CALLS:
         return "debug_transcript"
     if company.get("source") == "google_places":
@@ -649,6 +988,7 @@ def _execute_batch(call_rows: list[tuple[dict, dict]], batch: dict):
         target = {
             "debug_transcript": _run_debug_group,
             "twilio_vendor": _run_twilio_batch,
+            "demo_phone": _run_twilio_batch,
             "agent_bridge": _run_bridge_group,
         }[mode]
         worker = threading.Thread(target=_guard_group,
@@ -707,6 +1047,35 @@ def _run_debug_one(call_id: str, company: dict):
     job = db.get("jobs", call["job_id"])
     pack = load_pack(job["vertical"], job.get("area_code", ""))
     result = generate_debug_result(job, company, call["kind"], call["knowledge_snapshot"], pack)
+
+    # Persist the already-generated deterministic conversation one turn at a
+    # time.  The structured quote below is intentionally withheld until every
+    # turn is visible, so the transcript and offer can never diverge and the
+    # realtime UI observes the same lifecycle as a provider-backed call.
+    call.update({
+        "transcript": [],
+        "transcript_kind": "debug_generated_streaming",
+        "transcript_streaming": True,
+        "transcript_turn_count": 0,
+        "last_transcript_at": "",
+    })
+    db.put("calls", call_id, call, job_id=call["job_id"], company_id=company["id"])
+    turns = result.get("transcript", [])
+    for turn_index, turn in enumerate(turns, start=1):
+        call = db.get("calls", call_id)
+        transcript = list(call.get("transcript", []))
+        transcript.append(dict(turn))
+        call.update({
+            "transcript": transcript,
+            "transcript_streaming": True,
+            "transcript_turn_count": turn_index,
+            "last_transcript_at": now(),
+        })
+        db.put("calls", call_id, call, job_id=call["job_id"], company_id=company["id"])
+        if turn_index < len(turns) and call.get("demo_roleplay") \
+                and config.DEBUG_TRANSCRIPT_TURN_DELAY_SECS:
+            time.sleep(config.DEBUG_TRANSCRIPT_TURN_DELAY_SECS)
+
     quote_payload = result.get("quote")
     quote = None
     if quote_payload:
@@ -751,13 +1120,14 @@ def _run_debug_one(call_id: str, company: dict):
             result.get("validation", {}).get("valid") and evidence_check.get("valid")
         )
         quote["evidence_kind"] = "debug_generated"
-        db.put("quotes", quote["id"], quote, job_id=call["job_id"],
-               company_id=company["id"], phase=phase)
 
     call = db.get("calls", call_id)
     call.update({
         "status": "completed", "ended_at": now(),
         "transcript": result["transcript"], "transcript_kind": "debug_generated",
+        "transcript_streaming": False,
+        "transcript_turn_count": len(result.get("transcript", [])),
+        "last_transcript_at": call.get("last_transcript_at") or now(),
         "debug_generated": True, "audio_path": "", "conversation_id": "",
         **result.get("outcome", {"outcome": "hangup"}),
         "grounding_validation": result.get("validation", {}),
@@ -767,6 +1137,11 @@ def _run_debug_one(call_id: str, company: dict):
     learning = persist_questions(job, questions, source_call_id=call_id, company_id=company["id"])
     call["learning_analysis"] = learning
     db.put("calls", call_id, call, job_id=call["job_id"], company_id=company["id"])
+    # Publish the offer only after the associated call is observably terminal.
+    # Its fields and evidence still come from the exact streamed `result`.
+    if quote:
+        db.put("quotes", quote["id"], quote, job_id=call["job_id"],
+               company_id=company["id"], phase=quote["phase"])
     if call.get("recall_reservation_id"):
         from .recall_limits import set_status
         set_status(call["job_id"], company["id"], call["recall_reservation_id"],
@@ -814,6 +1189,7 @@ def _run_twilio_batch(rows: list[tuple[dict, dict]], batch: dict):
                 "company_name": company["name"], "call_id": call["id"],
                 "batch_id": call["batch_id"], "phase": phase,
                 "knowledge_version": call["knowledge_version"],
+                "demo_roleplay": bool(call.get("demo_roleplay")),
             }},
         })
     payload = {
@@ -1032,6 +1408,9 @@ def _fail_call(call_id: str, error: str, *, reason: str = "technical_failure",
         "terminal_reason": reason,
         "transcript": call.get("transcript", []),
         "transcript_kind": call.get("transcript_kind") or "none",
+        "transcript_streaming": False,
+        "transcript_turn_count": len(call.get("transcript", [])),
+        "last_transcript_at": call.get("last_transcript_at") or now(),
     })
     if external_status:
         call["external_status"] = external_status
@@ -1071,6 +1450,12 @@ def start_demo_call(job_id: str, company_id: str, phase: str) -> dict:
         raise RuntimeError("ELEVENLABS_PHONE_NUMBER_ID missing — import the Twilio number in ElevenLabs.")
     if not config.ELEVENLABS_API_KEY or not config.registry_path().exists():
         raise RuntimeError("ElevenLabs is not configured/provisioned for the live demo.")
+    job = db.get("jobs", job_id)
+    if not job:
+        raise LookupError("job not found")
+    if job.get("archived"):
+        raise RuntimeError("Archived jobs are read-only. Reset the demo to create a fresh job.")
+    demo = _demo_mode(job)
     company = db.get("companies", company_id)
     job_company_ids = {c["id"] for c in db.where("companies", job_id=job_id)}
     if not company or company_id not in job_company_ids:
@@ -1078,6 +1463,19 @@ def start_demo_call(job_id: str, company_id: str, phase: str) -> dict:
     if company.get("source") != "google_places" or not company.get("external_ids", {}).get(
             "google_places"):
         raise LookupError("Live demo requires a real Google Places vendor selected from this job.")
+    if demo:
+        if company_id != demo.get("live_company_id"):
+            raise LookupError("This demo session can route only its preselected live role-play vendor.")
+        if phase == "quote":
+            raise RuntimeError(
+                "The selected human quote must be gathered as part of the all-vendor batch. "
+                "Reset the demo if that live batch attempt needs to be repeated."
+            )
+        state = queue_state(job_id)
+        if state["running"] or state["summary"]["called"] != state["summary"]["total"]:
+            raise RuntimeError(
+                "Finish the complete all-vendor quote run before starting the live negotiation."
+            )
     if phase == "negotiate" and not any(
             q["company_id"] == company_id and q.get("evidence_verified")
             and q.get("grounding_verified")
@@ -1086,7 +1484,6 @@ def start_demo_call(job_id: str, company_id: str, phase: str) -> dict:
             for q in db.where("quotes", job_id=job_id)):
         raise LookupError("This vendor has no verified quote to negotiate yet.")
 
-    job = db.get("jobs", job_id)
     _validate_agent_registry(job)
     prior_calls = db.where("calls", job_id=job_id, company_id=company_id)
     if any(call.get("status") not in TERMINAL_CALL_STATUSES for call in prior_calls):
@@ -1102,9 +1499,22 @@ def start_demo_call(job_id: str, company_id: str, phase: str) -> dict:
         raise RuntimeError("Another call run or live demo is already active for this job.")
     try:
         version = int(job.get("knowledge_version", 0))
-        # A real human demo must never spend a synthetic debug offer, even if
-        # the global debug scheduler produced it earlier in this same job.
-        snapshot = create_snapshot(job_id, version, allow_debug_leverage=False)
+        # Normal live calls must never spend synthetic debug evidence. The
+        # sole exception is this explicitly prepared, disclosed human
+        # role-play, where every synthetic amount is labelled as such aloud.
+        snapshot = create_snapshot(
+            job_id, version,
+            # Only the server-side allow-listed human role-play may spend
+            # synthetic demo-market evidence, and its context/prompt must
+            # disclose that evidence as simulated. Normal live calls remain
+            # unable to cite debug data.
+            allow_debug_leverage=bool(demo),
+        )
+        context = context_for(snapshot, company_id)
+        if demo and phase == "negotiate" and not context.get("allowed_competitive_claims"):
+            raise LookupError(
+                "No grounded competing demo-market offer exists yet; negotiation is blocked."
+            )
         recall = None
         if phase == "negotiate" or prior_calls:
             from .recall_limits import reserve as reserve_recall
@@ -1122,12 +1532,18 @@ def start_demo_call(job_id: str, company_id: str, phase: str) -> dict:
         call = {
             "id": call_id, "job_id": job_id, "company_id": company_id,
             "kind": phase, "mode": "demo_phone", "status": "queued",
-            "knowledge_version": version, "knowledge_snapshot": context_for(snapshot, company_id),
+            "knowledge_version": version, "knowledge_snapshot": context,
             "spec_hash": snapshot["spec_hash"], "attempt_number": len(db.where(
                 "calls", job_id=job_id, company_id=company_id)) + 1,
             "created_at": now(), "run_id": run_id,
             "dialed_to": "configured_demo_phone",
         }
+        if demo:
+            call.update({
+                "demo_roleplay": True,
+                "demo_session_id": demo.get("session_id", ""),
+                "counterparty_setup": "human_roleplay",
+            })
         if recall:
             call["recall_reservation_id"] = recall["reservation_id"]
             call["recall_slot"] = recall["slot"]

@@ -184,6 +184,11 @@ def create_snapshot(job_id: str, version: int, *,
         "version": version,
         "created_at": frozen_at.isoformat(),
         "job_id": job_id,
+        "demo_roleplay": bool(
+            (job.get("demo_mode") or {}).get("roleplay")
+            and (job.get("demo_mode") or {}).get("active")
+            and not job.get("archived")
+        ),
         "spec": job.get("spec", {}),
         "spec_hash": spec_hash(job.get("spec", {})),
         "benchmark": market_range(job.get("spec", {}), pack),
@@ -214,6 +219,21 @@ def context_for(snapshot: dict, company_id: str) -> dict:
                 "phase": q.get("phase", "initial"),
                 "evidence_kind": q.get("evidence_kind", "")}
                for q in competing]
+    demo_roleplay = bool(snapshot.get("demo_roleplay"))
+    if demo_roleplay:
+        rules = (
+            "This is an explicitly disclosed human role-play demo. Use the spec verbatim. "
+            "Competitive claims are allowed ONLY when their exact quote_id, company and total "
+            "occur in allowed_competitive_claims. Claims whose evidence_kind is debug_generated "
+            "MUST be called simulated demo-market offers out loud; never imply the named real "
+            "business was contacted. If a fact is absent, say it is unverified; never infer or round."
+        )
+    else:
+        rules = (
+            "Use the spec verbatim. Competitive claims are allowed ONLY when their exact "
+            "quote_id, company and total occur in allowed_competitive_claims. If a fact is "
+            "absent, say you do not have verified information; never infer or round it."
+        )
     return {
         "knowledge_version": snapshot.get("version", 0),
         "snapshot_created_at": snapshot.get("created_at", ""),
@@ -224,17 +244,16 @@ def context_for(snapshot: dict, company_id: str) -> dict:
         "competing_quotes": competing,
         "allowed_competitive_claims": allowed,
         "excluded_unverified_offer_count": len(snapshot.get("offers", [])) - len(verified),
-        "rules": (
-            "Use the spec verbatim. Competitive claims are allowed ONLY when their exact "
-            "quote_id, company and total occur in allowed_competitive_claims. If a fact is "
-            "absent, say you do not have verified information; never infer or round it."
-        ),
+        "demo_roleplay": demo_roleplay,
+        "rules": rules,
     }
 
 
 def follow_up_plan(job_id: str, knowledge_version: int) -> list[dict]:
     """Explainable recall suggestions.  This plans; it never dials by itself."""
     frozen_at = datetime.now(timezone.utc)
+    job = db.get("jobs", job_id) or {}
+    demo_roleplay = bool((job.get("demo_mode") or {}).get("roleplay"))
     offers = [q for q in latest_offers(job_id)
               if q.get("company_id") and q.get("evidence_verified")
               and q.get("grounding_verified")
@@ -271,8 +290,10 @@ def follow_up_plan(job_id: str, knowledge_version: int) -> list[dict]:
         if q.get("red_flags"):
             reasons.append("Resolve flagged fees or terms before recommending the offer.")
         if q["id"] != best_market["id"] and q["total"] <= best_market["total"] * 1.35:
+            evidence_label = ("simulated demo-market" if demo_roleplay else "verified")
             reasons.append(
-                f"A verified ${best_market['total']:,.0f} competing offer now creates price-match leverage."
+                f"A {evidence_label} ${best_market['total']:,.0f} competing offer now "
+                "creates price-match leverage."
             )
             source_ids.append(best_market["id"])
         if q["id"] == best_market["id"] and not q.get("binding"):

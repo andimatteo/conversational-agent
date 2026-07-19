@@ -60,7 +60,14 @@ def parse_document(filename: str, content: bytes, pack: dict, current_spec: dict
                                      "an equipment/system spec sheet, or an inspection report)."},
             {"type": "file", "file": {
                 "filename": filename,
-                "file_data": f"data:application/pdf;base64,{base64.b64encode(content).decode()}"}},
+                # The live Chat Completions endpoint currently requires the
+                # PDF MIME data-URL prefix here (verified against the API),
+                # despite the reference describing the value generically as
+                # base64-encoded file data.
+                "file_data": (
+                    "data:application/pdf;base64,"
+                    + base64.b64encode(content).decode("ascii")
+                )}},
         ]
     elif ext in TEXT_TYPES or not ext:
         user_content = [{"type": "text", "text": "Extract job data from this document:\n\n"

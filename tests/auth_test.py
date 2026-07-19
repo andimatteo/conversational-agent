@@ -78,6 +78,14 @@ def main():
     assert c.get(f"/api/jobs/{job_b['id']}", headers=hb).status_code == 200
     print("isolation OK: bob's job answers 404 to alice on every route")
 
+    # --- the reusable demo PDF is authenticated and valid -------------------
+    assert c.get("/api/demo/intake-pdf").status_code == 401
+    demo_pdf = c.get("/api/demo/intake-pdf", headers=ha)
+    assert demo_pdf.status_code == 200
+    assert demo_pdf.headers["content-type"].startswith("application/pdf")
+    assert demo_pdf.content.startswith(b"%PDF-1.4")
+    print("demo PDF OK: authenticated reusable intake asset")
+
     # --- logout kills the token ---------------------------------------------
     c.post("/api/auth/logout", headers=ha)
     assert c.get("/api/me", headers=ha).status_code == 401

@@ -34,10 +34,12 @@ def build_report(job_id: str) -> dict:
         negotiated = next((q for q in reversed(quotes) if q["phase"] == "negotiated"), None)
         trusted_initial = next((q for q in reversed(quotes)
                                 if q["phase"] == "initial" and q.get("evidence_verified")
-                                and q.get("grounding_verified")), None)
+                                and q.get("grounding_verified")
+                                and q.get("itemization_verified") is True), None)
         trusted_negotiated = next((q for q in reversed(quotes)
                                    if q["phase"] == "negotiated" and q.get("evidence_verified")
-                                   and q.get("grounding_verified")), None)
+                                   and q.get("grounding_verified")
+                                   and q.get("itemization_verified") is True), None)
         best = trusted_negotiated or trusted_initial or negotiated or initial
         trusted = best in (trusted_negotiated, trusted_initial)
         co_calls = [c for c in calls if c["company_id"] == co["id"]]
@@ -79,20 +81,43 @@ def build_report(job_id: str) -> dict:
     rows.sort(key=lambda r: r["score"], reverse=True)
     winner = next((r for r in rows if r.get("trusted") and r["score"] >= 0), None)
 
+    demo_roleplay = bool((job.get("demo_mode") or {}).get("roleplay"))
+    demo_live_company_id = (job.get("demo_mode") or {}).get("live_company_id", "")
     return {
         "job": job,
+        "demo_roleplay": demo_roleplay,
+        "demo_notice": (
+            "Role-play evidence only: synthetic offers are not quotes from the named real businesses."
+            if demo_roleplay else ""
+        ),
         "benchmark": bench,
         "market_evidence": pack["meta"].get("evidence", []),
         "ranking": rows,
-        "recommendation": _recommendation(winner, rows, bench) if winner else
+        "recommendation": _recommendation(
+            winner, rows, bench, demo_roleplay, demo_live_company_id
+        ) if winner else
             "No evidence-verified, grounded quote is safe to recommend. See per-call outcomes.",
     }
 
 
-def _recommendation(w: dict, rows: list, bench: dict) -> str:
+def _recommendation(w: dict, rows: list, bench: dict, demo_roleplay: bool = False,
+                    demo_live_company_id: str = "") -> str:
     name = w["company"]["name"]
-    parts = [f"Book {name} at ${w['final_total']:,.0f}"
-             + (" (binding quote)" if w["binding"] else " (get it in writing before booking)") + "."]
+    if demo_roleplay and w["company"]["id"] == demo_live_company_id:
+        parts = [
+            f"Demo result only: the {name} role-play ended at ${w['final_total']:,.0f}. "
+            "This is not a quote from or recommendation to book the real Google-listed business."
+        ]
+    elif demo_roleplay:
+        parts = [
+            f"Demo-market result only: the synthetic offer labelled {name} is "
+            f"${w['final_total']:,.0f}. The named Google business was not contacted, and this "
+            "is not a real quote or booking recommendation."
+        ]
+    else:
+        parts = [f"Book {name} at ${w['final_total']:,.0f}"
+                 + (" (binding quote)" if w["binding"] else
+                    " (get it in writing before booking)") + "."]
     if w.get("saved_in_negotiation"):
         verified = any(e.get("verified_in_transcript") and e.get("grounding_verified")
                        for e in w.get("evidence", [])

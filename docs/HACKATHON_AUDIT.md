@@ -1,6 +1,6 @@
 # Hackathon compliance audit
 
-Audit date: 2026-07-18. This file distinguishes implemented safeguards from
+Audit date: 2026-07-19. This file distinguishes implemented safeguards from
 evidence that still has to be produced in the live rehearsal. Transcript-only
 debug runs are useful product tests, but **do not count as live voice calls** for
 the ElevenLabs challenge.
@@ -17,19 +17,24 @@ the ElevenLabs challenge.
 | Itemised comparable quotes | Implemented and tested | Canonical fee taxonomy, structured quote model, red-flag engine and report. Live rehearsal must confirm all three agents actually invoke the logging tool. |
 | Negotiation moves price/terms using leverage | Grounded implementation; live proof pending | Closer receives own history plus exact allowed competing quote ids from a frozen DB snapshot. Debug test proves a concession cannot occur without both. Record one live concession with initial/final totals. |
 | Honest AI disclosure | Prompt-enforced; live eval pending | Every domain has an explicit disclosure and robot-question answer. Play at least one “are you a robot?” exchange in the final demo. |
-| No invented spec or bid | Architecturally constrained and tested | `get_call_context` is the frozen truth source; only completed, evidence-verified and post-call-grounded quotes enter leverage. The semantic validator checks spoken dollar amounts, competitor mentions and declared quote IDs against that snapshot; ungrounded results cannot become the best offer or recommendation. |
+| No invented spec or bid | Architecturally constrained and tested | `get_call_context` is the frozen truth source; only completed, evidence-verified, itemised and post-call-grounded quotes enter leverage. The semantic validator checks spoken dollar amounts, competitor mentions and declared quote IDs against that snapshot. In the explicit human role-play only, debug claims must be called “simulated demo-market” in the same turn; they can never be represented as real-business quotes. |
 | Friction handling | Implemented; live proof pending | Prompts cover interruption, vague quotes, callbacks, refusal and hangup; audio bridge supports barge-in. Rehearse at least one refusal/interruption. |
 | Structured outcome for every call | Enforced | Tool validation requires quote/callback/decline details. Finalization infers and visibly marks a failed/hangup outcome if the agent omits its tool, so no terminal call remains vague. |
 | Learn from every completed vendor call | Implemented and tested | A mandatory backend finalization pass extracts price-relevant questions, upserts them by domain+area with call/vendor provenance, and feeds future intake forms. |
 | Recall vendors | Implemented and tested | Batch completion produces explainable follow-up recommendations; selected vendors can be recalled with exact DB leverage. An atomic persistent guard permits at most two callbacks per job/vendor, including reserved, failed and completed attempts, preventing loops and harassment. |
 | Ranked report with transcript evidence | Implemented and tested | Risk-aware ranking, fee detail, evidence verification status, call id, conversation id and authenticated audio URL. Debug evidence is explicitly labelled synthetic and has no audio. |
-| Twilio + ElevenLabs live phone demo | Code complete; external setup pending | `POST /api/jobs/:jobId/calls/demo {company_id, phase}` submits a native one-recipient batch to only `DEMO_PHONE_NUMBER`, preserves the selected Google vendor, reconciles terminal recipient state, and fetches transcript/audio. No Twilio number is currently imported in ElevenLabs, so `ELEVENLABS_PHONE_NUMBER_ID` still has to be configured. |
+| Twilio + ElevenLabs live phone demo | Code complete; live proof pending | A Twilio source number is imported in ElevenLabs and its ID is configured locally. `demo_reset` preselects one Google identity; `/calls/start` routes that identity to `DEMO_PHONE_NUMBER` as an explorer in quote batch one, then automatically recalls it with grounded context after every quote barrier. Provider terminal state, transcript and audio are reconciled. The current public tunnel must be reachable and agents re-provisioned before rehearsal. |
 | Closed-loop live demonstration | Not yet proven | Final acceptance requires one recorded run: voice+document intake → confirm → three live styles → at least one grounded concession → report with playable evidence. |
 
 ## Safety distinction
 
 - `DEBUG_CALLS=true`: real Google vendor identity, generated structured
   transcript, no phone, no counter-agent, no ElevenLabs session, no audio.
+- Prepared hybrid demo with `DEBUG_CALLS=true`: every vendor remains in the logical
+  square-root batch run, but exactly one preselected identity is routed to the
+  server-side allow-listed human in quote batch one, then automatically recalled
+  after all quote barriers. The human is disclosed as a role-player; N-1 offers
+  remain explicitly synthetic.
 - Bulk mode with `DEBUG_CALLS=false`: real vendor phones are sent through
   ElevenLabs native Twilio batches only when the independent
   `LIVE_VENDOR_CALLS_ENABLED=true` gate is also set; use only after legal/compliance review.
@@ -44,7 +49,9 @@ Run all offline checks with:
 make test
 ```
 
-The batching regression specifically proves 10 vendors → 4/4/2, frozen
-same-batch knowledge, all-vendor completion, learned-question persistence,
-realtime summary fields, semantic anti-hallucination validation, atomic/idempotent run
-ownership, provider failure reconciliation, and rejection of a third vendor recall.
+The batching and hybrid regressions specifically prove 10 vendors → 4/4/2, frozen
+same-batch knowledge, all-vendor completion, exactly one allow-listed provider
+destination, simulated-evidence disclosure, preserved Google identity, non-destructive
+repeatable reset, learned-question persistence, realtime summary fields, semantic
+anti-hallucination validation, atomic/idempotent run ownership, provider failure
+reconciliation, and rejection of a third vendor recall.

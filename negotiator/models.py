@@ -86,6 +86,10 @@ class Company(BaseModel):
     address: str = ""
     discovery_sources: list[str] = []
     external_ids: dict[str, str] = {}
+    # Optional presentation metadata for the explicit allow-listed role-play
+    # demo. The real Google identity/phone above remain untouched in storage.
+    demo_roleplay: bool = False
+    demo_alias: str = ""
 
 
 class RegisterIn(BaseModel):

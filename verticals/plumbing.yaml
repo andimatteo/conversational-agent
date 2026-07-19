@@ -24,9 +24,9 @@ estimator_persona: >
   heater age, slab foundations, permit requirements.
 
 estimator_first_message: >
-  Hi! I'm the intake assistant from QuoteWise — I'll build the exact job
-  spec we'll use to get you real, comparable plumbing quotes. First: what's
-  going on with your plumbing?
+  Hi! I'm the intake assistant from QuoteWise. I'll first check what your
+  uploaded documents already covered, then ask only the few missing details
+  needed for comparable plumbing quotes. Ready to finish the intake?
 
 # The one-line probe hint rendered into the estimator prompt: fee
 # traps a customer wouldn't think to mention.

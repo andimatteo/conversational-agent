@@ -84,14 +84,31 @@ def runtime_config(user: dict = Depends(auth.current_user)):
         "debug_behavior": "transcript_only" if config.DEBUG_CALLS else "voice_and_telephony",
         "debug_notice": (
             "Real Google vendor identities; no phone call, conversational session, or audio. "
-            "Transcripts and quotes are generated and explicitly labelled synthetic."
+            "Transcripts and quotes are generated and explicitly labelled synthetic. "
+            "An explicitly prepared role-play job is a narrow exception: after a separate "
+            "two-call confirmation, its preselected vendor identity routes only to the "
+            "configured human in quote batch one and once more after every quote barrier."
             if config.DEBUG_CALLS else "Real outbound voice calls are enabled."
         ),
         "demo_phone_configured": bool(config.DEMO_PHONE_NUMBER),
         "demo_phone_masked": _masked_phone(config.DEMO_PHONE_NUMBER),
         "twilio_number_configured": bool(config.ELEVENLABS_PHONE_NUMBER_ID),
         "live_vendor_calls_enabled": config.LIVE_VENDOR_CALLS_ENABLED,
+        "demo_intake_pdf_url": "/api/demo/intake-pdf",
     }
+
+
+@app.get("/api/demo/intake-pdf")
+def demo_intake_pdf(user: dict = Depends(auth.current_user)):
+    """Authenticated, reproducible intake document for the live run-of-show."""
+    path = config.ROOT / "assets" / "demo" / "water_heater_intake.pdf"
+    if not path.is_file():
+        raise HTTPException(404, "Demo intake PDF is not available.")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename="QuoteWise-water-heater-intake.pdf",
+    )
 
 
 # --------------------------------------------------------------------------
@@ -327,12 +344,20 @@ class StartCallsIn(BaseModel):
     retry_completed: bool = False
     recommended_only: bool = False
     idempotency_key: str = Field(default="", max_length=128)  # retry-safe request id
+    # Prepared hybrid demos place two calls to the allow-listed human. A
+    # deliberate per-run acknowledgement prevents stale clients from starting
+    # that sequence while believing global debug mode is fully transcript-only.
+    authorize_demo_calls: bool = False
 
 
 @app.post("/api/jobs/{job_id}/calls/start")
 def start_calls(job_id: str, body: StartCallsIn, user: dict = Depends(auth.current_user)):
     """Kick off the calls server-side (background); the queue endpoint shows
-    progress. Spec must be confirmed first — the backend enforces it."""
+    progress. Spec must be confirmed first — the backend enforces it. On an
+    explicitly prepared role-play job, the preselected Google lead is routed
+    server-side to the allow-listed human in quote batch one and recalled only
+    after every quote barrier. `authorize_demo_calls=true` is required; no
+    discovered Google phone is dialled."""
     job = _owned_job(job_id, user)
     if body.phase not in ("quote", "negotiate"):
         raise HTTPException(422, "phase must be 'quote' or 'negotiate'")
@@ -343,7 +368,8 @@ def start_calls(job_id: str, body: StartCallsIn, user: dict = Depends(auth.curre
         return callrunner.start_calls(job_id, body.phase, body.company_ids or None, body.parallel,
                                       retry_completed=body.retry_completed,
                                       recommended_only=body.recommended_only,
-                                      idempotency_key=body.idempotency_key or None)
+                                      idempotency_key=body.idempotency_key or None,
+                                      authorize_demo_calls=body.authorize_demo_calls)
     except RuntimeError as e:
         raise HTTPException(409, str(e))
     except LookupError as e:
@@ -360,8 +386,9 @@ def demo_call(job_id: str, body: DemoCallIn, user: dict = Depends(auth.current_u
     """Call the single server-configured demo phone through the imported
     Twilio number while preserving the selected Google vendor record.
 
-    This explicit action is the sole exception to global transcript-only debug;
-    bulk scheduling never dials while DEBUG_CALLS=true.
+    For a prepared role-play job the initial live quote belongs to the bulk
+    run; this endpoint is then negotiation-only. Normal jobs retain the legacy
+    explicit quote/negotiate behavior.
     """
     job = _owned_job(job_id, user)
     if body.phase not in ("quote", "negotiate"):

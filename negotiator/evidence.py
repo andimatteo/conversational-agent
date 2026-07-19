@@ -26,6 +26,9 @@ _GENERIC_COMPETITOR_CLAIM = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_SIMULATION_DISCLOSURE = re.compile(
+    r"\b(?:simulat(?:ed|ion)|demo[- ]market|role[- ]play)\b", re.IGNORECASE
+)
 _MONEY_RE = re.compile(
     r"(?<![\w])(?:"
     r"(?P<prefix>-?\s*(?:US\$|\$|USD\s*))\s*(?P<pnum>\d[\d,]*(?:\.\d+)?)\s*(?P<pk>[kK])?"
@@ -109,6 +112,8 @@ def validate_call_grounding(
             "total": float(detail["total"]),
             "binding": bool(detail.get("binding", allowed_row.get("binding", False))),
             "evidence_verified": True,
+            "evidence_kind": str(detail.get("evidence_kind")
+                                 or allowed_row.get("evidence_kind") or ""),
             "source": _completion_source(detail, is_frozen),
         }
 
@@ -285,6 +290,30 @@ def validate_call_grounding(
                     role=role,
                     quote_id=quote_id,
                 )
+        # A declared synthetic quote remains a competitive claim when the
+        # agent says only "can you match $X?". Require the disclosure whenever
+        # an agent turn references a synthetic claim by identity or amount.
+        synthetic_claim_ids = {
+            quote_id for quote_id in declared_leverage
+            if eligible_claims.get(quote_id, {}).get("evidence_kind") == "debug_generated"
+            and (
+                quote_id in turn_claim_ids
+                or any(abs(float(record["amount"])
+                           - float(eligible_claims[quote_id]["total"])) <= tolerance
+                       for record in turn_money)
+            )
+        }
+        if role in _AGENT_ROLES and synthetic_claim_ids \
+                and not _SIMULATION_DISCLOSURE.search(text):
+            _issue(
+                issues,
+                "undisclosed_simulated_claim",
+                "Synthetic competitive leverage must be called a simulated demo-market "
+                "offer in the same turn as its amount or identity.",
+                turn_index=turn_index,
+                role=role,
+                quote_ids=sorted(synthetic_claim_ids),
+            )
 
         if role in _AGENT_ROLES and _GENERIC_COMPETITOR_CLAIM.search(text):
             grounded_in_turn = any(

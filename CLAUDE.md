@@ -8,7 +8,7 @@ the proof status in `docs/DEMO_SCRIPT.md`.
 QuoteWise targets the ElevenLabs **The Negotiator** challenge: one confirmed job spec,
 comparable market calls, grounded negotiation, and a ranked evidence-backed report.
 
-Decisions made 2026-07-18:
+Decisions current as of 2026-07-19:
 
 - Domain behavior is configuration in `verticals/<domain>[-<area>].yaml`. The MVP is
   **residential plumbing / 28202**; moving remains the second proof-of-swap sheet.
@@ -19,12 +19,13 @@ Decisions made 2026-07-18:
   ElevenLabs conversation, counter-agent, or audio.
 - `DEBUG_CALLS=false` is still not authority to dial real businesses:
   `LIVE_VENDOR_CALLS_ENABLED=true` is a separate operator gate.
-- The live hackathon path is human-in-the-loop through
-  `POST /api/jobs/{id}/calls/demo`. The server, not the client, supplies the single
-  allow-listed `DEMO_PHONE_NUMBER`; Twilio is imported through ElevenLabs via
-  `ELEVENLABS_PHONE_NUMBER_ID`.
-- Never use a debug transcript as proof of a live voice criterion. Use separate jobs for
-  debug scale and live qualifying evidence.
+- The resettable hackathon path is one explicit hybrid job. `/calls/start` keeps every
+  Google identity in the logical batch run, routes only one preselected final-batch
+  identity to the allow-listed `DEMO_PHONE_NUMBER`, and leaves every other row
+  transcript-only. `/calls/demo` then calls the same human back for negotiation.
+- Never use a debug transcript as proof of a live voice criterion or imply a simulated
+  offer came from the named Google business. In the disclosed role-play it may be used
+  only as exact “simulated demo-market” leverage.
 - Stack: FastAPI/SQLite backend plus external Lovable frontend.
 
 ## Architecture
@@ -47,7 +48,9 @@ Mode selection:
 - debug on → `negotiator/debugcalls.py`, transcript-only;
 - debug off + Google vendor → ElevenLabs native Twilio batch calling;
 - simulated company → live ElevenLabs agent-to-agent bridge;
-- explicit `/calls/demo` → configured human demo phone, even while bulk debug remains on.
+- prepared hybrid `/calls/start` → preselected human explorer in quote batch one,
+  N-1 debug transcripts, then an automatic grounded callback after the full barrier;
+- prepared `/calls/demo phase=negotiate` → legacy explicit rehearsal endpoint only.
 
 The Caller and Closer log quote/outcome by exact `call_id`. Negotiated quotes carry
 `leverage_quote_ids`, checked against that call's frozen allowed claims. Voice
@@ -67,7 +70,7 @@ called/total, batch status, knowledge version, and follow-up annotations. Record
 exposed only through the owner-scoped
 `GET /api/jobs/{job_id}/calls/{call_id}/audio`; debug calls correctly return 404.
 
-## Current state — 2026-07-18
+## Current state — 2026-07-19
 
 Verified offline:
 
@@ -77,6 +80,11 @@ Verified offline:
 - `tests.batching_test`: 10 vendors → batches 4/4/2, hard barrier, knowledge versions
   0/1/2, no within-batch leakage, all-vendor completion, live queue summary, mandatory
   learning marker, and grounded single-vendor recall.
+- `tests.demo_campaign_test`: 9 transcript-only vendors + one allow-listed role-player
+  in the final 4/4/2 batch, preserved Google identity, disclosed exact simulated
+  leverage, verified concession fixture, and rejection of a third recall.
+- `tests.demo_reset_test`: repeated non-destructive reset, preservation of calls,
+  quotes, runs, batches, claims, recalls and recordings, plus active-work refusal.
 - `tests.learnings_test`: normalized upsert/dedup, idempotent call replay, provenance,
   concurrent completion safety, area isolation, transcript/condition/contingent
   extraction, and generic fallback.
@@ -92,11 +100,12 @@ Verified offline:
 
 Implemented but **not yet live-proven**:
 
-1. The allow-listed `/calls/demo` Twilio + ElevenLabs call reaching the configured
-   human phone and finalizing its transcript/MP3.
-2. Three distinct live role-play quote calls on a clean job.
-3. One live follow-up where price or terms measurably move because of an exact competing
-   quote collected in those live calls.
+1. The integrated `/calls/start` final-batch Twilio call reaching the configured human
+   and finalizing its initial transcript/MP3.
+2. The `/calls/demo phase=negotiate` callback measurably moving price or terms using an
+   exact, explicitly disclosed simulated demo-market offer from the completed run.
+3. Three distinct live role-play negotiation-style artifacts; the one-human hybrid
+   run alone does not prove this criterion.
 4. End-to-end Lovable playback through the authenticated audio endpoint.
 5. Bulk `DEBUG_CALLS=false` against Google vendor phone numbers. Do not exercise this
    without explicit authorization; it is not needed for the allow-listed demo.
@@ -113,11 +122,14 @@ transcripts, and recordings exist. The judge-facing checkbox is in
   vendors. `count=0` means all; positive count exists only for old/diagnostic clients.
 - `POST /api/jobs/{id}/calls/start {phase, company_ids?, retry_completed?,
   recommended_only?, idempotency_key?}` → atomic/idempotent background run.
-  `parallel` is deprecated and ignored.
+  `parallel` is deprecated and ignored. On a prepared demo this is quote-only and
+  includes all vendors; the selected human explores in quote batch one and is
+  automatically recalled only after the final quote barrier.
 - `GET /api/jobs/{id}/call-queue` → live summary, batches, rows, and follow-ups.
 - `GET /api/jobs/{id}/follow-ups` → recommendations and source quote IDs; no auto-dial.
 - `POST /api/jobs/{id}/calls/demo {company_id, phase}` → only the configured demo
-  destination; no `to_number` in the request.
+  destination; no `to_number` in the request. Prepared demos accept only their fixed
+  target and negotiation phase after the complete quote barrier.
 - `GET /api/jobs/{id}/calls` → transcripts plus `has_audio`/`audio_url`, never raw paths.
 - `GET /api/jobs/{id}/calls/{call_id}/audio` → authenticated MP3 or 404.
 - `GET /api/jobs/{id}/report` → ranking with quote/call IDs, evidence verification kind,
@@ -181,6 +193,7 @@ python -m tests.provider_status_test
 # Runtime
 uvicorn negotiator.server:app --port 8000
 python -m agents.provision
+python -m negotiator.demo_reset                # archive prior demo, create a fresh confirmed job + promoted vendors
 python -m negotiator.seed --with-sample-spec
 python -m simulation.run_intake --job job_X
 curl localhost:8000/api/jobs/job_X/report | python -m json.tool
@@ -196,8 +209,10 @@ curl localhost:8000/api/jobs/job_X/report | python -m json.tool
   explicit company IDs to authorize recalls.
 - At most two recalls are ever reserved per job/vendor. A failed or queued attempt
   still consumes a slot; the third request must remain rejected.
-- `DEBUG_CALLS=true` suppresses all bulk telephony, but `/calls/demo` intentionally
-  remains available to the one configured number.
+- `DEBUG_CALLS=true` suppresses ordinary bulk telephony. A job explicitly prepared by
+  `demo_reset` is the narrow exception: its one fixed target goes to the configured
+  human in quote batch one and once after the final quote barrier; all other
+  destinations remain suppressed.
 - Debug transcripts must remain visibly labelled `debug_generated`; they have no
   conversation ID or recording.
 - Audio playback requires the same Bearer token as the Calls API.

@@ -190,7 +190,11 @@ def _finalize_call(call_id, job_id, company_id, conv_id):
         # A negotiator repeating its own tool payload is never evidence. Only
         # explicit vendor/user turns can verify the quote and each item amount.
         q["evidence_verified"] = bool(evidence_check.get("valid"))
-        q["evidence_kind"] = "voice_transcript"
+        q["evidence_kind"] = ("demo_roleplay_voice" if call.get("demo_roleplay")
+                              else "voice_transcript")
+        if call.get("demo_roleplay"):
+            q["demo_roleplay"] = True
+            q["counterparty_setup"] = "human_roleplay"
         db.put("quotes", q["id"], q, job_id=job_id, company_id=company_id, phase=q["phase"])
 
     call["grounding_validation"] = validate_call_grounding(call, call_quotes)

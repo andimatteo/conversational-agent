@@ -159,9 +159,9 @@ def _agent_body(name: str, prompt: str, voice_key: str, first_message: str, tool
                 "first_message": first_message,
                 "language": "en",
                 "dynamic_variables": {"dynamic_variable_placeholders":
-                                      {"job_id": "unset", "company_id": "unset", "company_name": "unset",
+                                       {"job_id": "unset", "company_id": "unset", "company_name": "unset",
                                        "call_id": "unset", "batch_id": "unset", "phase": "unset",
-                                       "knowledge_version": 0}},
+                                       "knowledge_version": 0, "demo_roleplay": False}},
                 "prompt": {"prompt": prompt, "llm": "gpt-4o", "temperature": 0.4, "tool_ids": tool_ids,
                            # without the end_call system tool an agent can say
                            # goodbye but is physically unable to hang up
@@ -205,8 +205,11 @@ def main():
     if not AGENT_TOOL_SECRET:
         sys.exit("AGENT_TOOL_SECRET missing — generate one with `openssl rand -hex 32`.")
     registry = json.loads(registry_path().read_text()) if registry_path().exists() else {}
-    registry["meta"] = {"vertical": vertical()["meta"]["vertical"],
-                        "schema_version": 2}
+    registry["meta"] = {
+        "vertical": vertical()["meta"]["vertical"],
+        "schema_version": prompts.PROMPT_SCHEMA_VERSION,
+        "prompt_revision": prompts.prompt_revision(),
+    }
 
     with httpx.Client(timeout=30) as client:
         print(f"Provisioning webhook tools -> {PUBLIC_BASE_URL}")

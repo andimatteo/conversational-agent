@@ -202,6 +202,27 @@ def test_agent_cannot_self_authorize_an_invented_quote():
     assert result["valid"] is False
 
 
+def test_synthetic_leverage_requires_same_turn_demo_disclosure():
+    call = _call()
+    call["knowledge_snapshot"]["demo_roleplay"] = True
+    call["knowledge_snapshot"]["competing_quotes"][0]["evidence_kind"] = "debug_generated"
+    call["knowledge_snapshot"]["allowed_competitive_claims"][0][
+        "evidence_kind"] = "debug_generated"
+    undisclosed = validate_call_grounding(call, [_logged_quote()])
+    assert "undisclosed_simulated_claim" in _codes(undisclosed)
+
+    call["transcript"][0]["text"] = (
+        "In this recorded role-play, I have a simulated demo-market offer labelled "
+        "Alpha Moving at $1,850. Your prior total was $2,200; can you improve it?"
+    )
+    disclosed = validate_call_grounding(call, [_logged_quote()])
+    assert disclosed["valid"] is True, disclosed
+
+    call["transcript"][0]["text"] = "Can you match $1,850?"
+    amount_only = validate_call_grounding(call, [_logged_quote()])
+    assert "undisclosed_simulated_claim" in _codes(amount_only)
+
+
 def main():
     test_grounded_call_is_valid_and_auditable()
     test_unverified_or_incomplete_claim_cannot_be_leverage()
@@ -210,6 +231,7 @@ def main():
     test_foreign_quote_cannot_authorize_transcript_amounts()
     test_raw_spec_quote_is_not_automatic_leverage()
     test_agent_cannot_self_authorize_an_invented_quote()
+    test_synthetic_leverage_requires_same_turn_demo_disclosure()
     print("EVIDENCE TEST PASSED: frozen claims, verified leverage, money and competitor checks")
 
 

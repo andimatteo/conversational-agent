@@ -45,6 +45,13 @@ AGENT_TOOL_SECRET = os.getenv("AGENT_TOOL_SECRET", "").strip()
 CALL_BATCH_TIMEOUT_SECS = int(os.getenv("CALL_BATCH_TIMEOUT_SECS", "900"))
 CALL_POLL_INTERVAL_SECS = float(os.getenv("CALL_POLL_INTERVAL_SECS", "2"))
 CALL_RUN_LEASE_SECS = int(os.getenv("CALL_RUN_LEASE_SECS", "2100"))
+# Synthetic demo conversations are persisted turn-by-turn so the Calls panel
+# can render genuine progressive state even though no counterparty phone/audio
+# is created.  At the default pace a whole concurrent debug batch remains
+# comfortably below one minute; tests explicitly set this to zero.
+DEBUG_TRANSCRIPT_TURN_DELAY_SECS = min(
+    2.0, max(0.0, float(os.getenv("DEBUG_TRANSCRIPT_TURN_DELAY_SECS", "0.25")))
+)
 # Product safety invariant: configuration may lower this, never raise it above
 # the user's hard cap of two callbacks per vendor/job.
 MAX_VENDOR_RECALLS = min(2, max(0, int(os.getenv("MAX_VENDOR_RECALLS", "2"))))
