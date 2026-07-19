@@ -6,6 +6,13 @@ concession (as the Closer would), and checks red flags + report ranking.
 
   .venv/bin/python -m tests.smoke_test
 """
+
+import os
+import tempfile
+
+# Isolate ALL storage (DB, uploads) in a throwaway dir — tests must never
+# pollute the real data/negotiator.db (learned questions, jobs, users).
+os.environ.setdefault("NEGOTIATOR_DATA_DIR", tempfile.mkdtemp(prefix="negotiator-test-"))
 from fastapi.testclient import TestClient
 
 from negotiator import db

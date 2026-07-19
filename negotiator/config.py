@@ -16,8 +16,10 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
 VERTICAL = os.getenv("VERTICAL", "moving")
 
-DATA_DIR = ROOT / "data"
-DATA_DIR.mkdir(exist_ok=True)
+# Overridable so tests run on a throwaway dir instead of polluting the real
+# DB (learned questions, jobs) with test artifacts.
+DATA_DIR = Path(os.getenv("NEGOTIATOR_DATA_DIR", ROOT / "data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "negotiator.db"
 RECORDINGS_DIR = DATA_DIR / "recordings"
 RECORDINGS_DIR.mkdir(exist_ok=True)

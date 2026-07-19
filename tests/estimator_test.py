@@ -7,6 +7,13 @@ Covers the plumbing MVP end to end:
 
   .venv/bin/python -m tests.estimator_test
 """
+
+import os
+import tempfile
+
+# Isolate ALL storage (DB, uploads) in a throwaway dir — tests must never
+# pollute the real data/negotiator.db (learned questions, jobs, users).
+os.environ.setdefault("NEGOTIATOR_DATA_DIR", tempfile.mkdtemp(prefix="negotiator-test-"))
 import uuid
 
 from fastapi.testclient import TestClient
@@ -75,8 +82,22 @@ def main():
     r = c.post("/agent-tools/save_job_spec", json={"job_id": job["id"], "spec": partial}).json()
     assert set(r["missing_required_fields"]) == {"urgency", "access"}
     assert c.post("/agent-tools/get_job_spec", json={"job_id": job["id"]}).status_code == 409
+
+    # the interview only asks what's missing: the form tool exposes what's on file
+    r = c.post("/agent-tools/get_intake_form", json={"job_id": job["id"]}).json()
+    assert set(r["missing_required_fields"]) == {"urgency", "access"}
+    assert r["already_on_file"]["job_type"] == "water_heater"
+    print("ask-only-missing OK: form tool reports already_on_file + missing fields")
+
     r = c.post("/agent-tools/save_job_spec", json={"job_id": job["id"], "spec": PLUMBING_SPEC}).json()
     assert r["missing_required_fields"] == []
+    # a later partial save can never wipe known fields with empties (False is a real answer)
+    c.post("/agent-tools/save_job_spec",
+           json={"job_id": job["id"], "spec": {"pipe_material": "", "water_shutoff_known": False}})
+    spec_now = c.get(f"/api/jobs/{job['id']}", headers=h).json()["spec"]
+    assert spec_now["pipe_material"] == "copper" and spec_now["water_shutoff_known"] is False
+    print("no-clobber OK: empty values dropped on save, False/0 kept")
+
     c.post(f"/api/jobs/{job['id']}/confirm", headers=h).raise_for_status()
     assert c.post("/agent-tools/get_job_spec", json={"job_id": job["id"]}).status_code == 200
     print("spec guard OK: 409 until saved complete + user-confirmed")

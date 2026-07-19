@@ -8,6 +8,13 @@ force re-confirmation.
 
   .venv/bin/python -m tests.documents_test
 """
+
+import os
+import tempfile
+
+# Isolate ALL storage (DB, uploads) in a throwaway dir — tests must never
+# pollute the real data/negotiator.db (learned questions, jobs, users).
+os.environ.setdefault("NEGOTIATOR_DATA_DIR", tempfile.mkdtemp(prefix="negotiator-test-"))
 import uuid
 
 from fastapi.testclient import TestClient
