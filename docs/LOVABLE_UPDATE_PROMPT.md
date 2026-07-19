@@ -66,3 +66,18 @@ Update QuoteWise. Keep everything not mentioned here exactly as it is.
   account tabs (`POST /api/auth/login` and `/api/auth/register`, both return
   `{token, user}`), token in localStorage, avatar menu with Profile
   (`GET /api/me` → `{user, jobs}`) and Logout (`POST /api/auth/logout`).
+
+**6. State-wide provider call list (new feature)**
+- Add a Providers page at `/job/:jobId/providers`, linked from each job and from
+  the sidebar. On load call `GET /api/jobs/:jobId/call-list`.
+- Add state, optional query and target-per-provider. Google Places, Yelp and
+  OpenStreetMap are fixed mandatory sources, shown as badges rather than checkboxes.
+  "Build call list" sends
+  `POST /api/jobs/:jobId/call-list/discover` with
+  `{state, query, target_per_provider}` and keeps the old list visible
+  while the state-wide search runs.
+- Render `provider_status`, `total`, and an `items` table with company, click-to-call
+  phone, `sources` chips, rating/reviews, location and external URL. Provider errors
+  are partial failures when another source succeeds. Show "3/3 sources complete"
+  only when `complete=true`; otherwise identify the missing mandatory source and keep
+  the Caller disabled. Partial results have `saved=false` and are diagnostic only.

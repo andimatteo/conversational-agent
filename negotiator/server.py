@@ -18,9 +18,11 @@ from .config import UPLOADS_DIR, personas, vertical
 from .models import Company, Job, LearnedIn, LoginIn, OutcomeIn, QuoteIn, RegisterIn
 from .packs import list_packs, load_pack
 from .report import build_report
+from market_discovery.router import router as call_list_router
 
 app = FastAPI(title="QuoteWise")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(call_list_router)
 
 
 # --------------------------------------------------------------------------
@@ -223,11 +225,10 @@ def intake_form(vertical_name: str = Query("", alias="vertical"), area_code: str
 
 
 @app.get("/api/jobs/{job_id}/market")
-def market(job_id: str, city: str, state: str, user: dict = Depends(auth.current_user)):
-    """Real-world call-list discovery via Tavily (simulated personas stay the callable demo market)."""
+def market(job_id: str, user: dict = Depends(auth.current_user)):
+    """Deprecated: call lists must use Google Places + Yelp + OSM."""
     _owned_job(job_id, user)
-    from .discovery import discover
-    return {"discovered": discover(city, state), "note": "Demo calls run against the simulated personas."}
+    raise HTTPException(410, f"Use POST /api/jobs/{job_id}/call-list/discover")
 
 
 @app.get("/api/jobs/{job_id}/companies")

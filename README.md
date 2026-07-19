@@ -45,7 +45,7 @@ where you answer the phone yourself.
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 # for voice modes (intake / --listen / --human): brew install portaudio && pip install pyaudio
-cp .env.example .env       # fill in ELEVENLABS_API_KEY, OPENAI_API_KEY, TAVILY_API_KEY
+cp .env.example .env       # fill in ElevenLabs, OpenAI, Google Places and Yelp keys
 ```
 
 Webhook tools need a public URL for the API server:
@@ -74,7 +74,10 @@ python -m simulation.run_calls --job job_XXXX --phase negotiate --listen # close
 python -m simulation.run_calls --job job_XXXX --phase quote --human      # YOU answer via mic
 
 curl localhost:8000/api/jobs/job_XXXX/report | python -m json.tool       # ranked, evidence-backed
-curl "localhost:8000/api/jobs/job_XXXX/market?city=Charlotte&state=NC"   # real-world call list (Tavily)
+# real-world call list from Google Places + Yelp + OSM
+curl -X POST localhost:8000/api/jobs/job_XXXX/call-list/discover \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"state":"North Carolina","target_per_provider":250}'
 ```
 
 Recordings land in `data/recordings/` (per-side WAVs + the ElevenLabs conversation MP3);
@@ -91,7 +94,7 @@ negotiator/server.py      FastAPI: product API + mid-call agent-tool webhooks
 negotiator/benchmarks.py  price model, red-flag engine, counterparty ground truth
 negotiator/report.py      ranking + plain-language recommendation with citations
 negotiator/docparse.py    document intake (OpenAI vision) → same spec schema
-negotiator/discovery.py   Tavily call-list discovery
+market_discovery/        state-wide Google Places + Yelp + OSM call-list discovery
 simulation/bridge.py      agent↔agent real-time audio bridge (paced PCM, real barge-in)
 simulation/run_calls.py   orchestrates quote/negotiate calls; human mode; parallel mode
 docs/DEMO_SCRIPT.md       judge-facing run-of-show mapped to the success criteria

@@ -1,30 +1,12 @@
-"""Market discovery: where the call list would come from in the real world.
-Tavily search -> business names/phones. In the demo the *callable* companies
-are the simulated personas; this module proves the real-world pipeline."""
-import re
+"""Deprecated compatibility module.
 
-from tavily import TavilyClient
+Call lists are intentionally built only by ``market_discovery`` from Google
+Places, Yelp Fusion and OpenStreetMap. Use the authenticated frontend endpoints:
 
-from .config import TAVILY_API_KEY, vertical
-
-PHONE_RE = re.compile(r"\(?\b\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b")
+    POST /api/jobs/{job_id}/call-list/discover
+    GET  /api/jobs/{job_id}/call-list
+"""
 
 
-def discover(city: str, state: str, limit: int = 8) -> list[dict]:
-    noun = vertical()["meta"]["counterparty_noun"]
-    client = TavilyClient(api_key=TAVILY_API_KEY)
-    res = client.search(
-        query=f"best {noun} companies in {city}, {state} phone number reviews",
-        max_results=limit,
-        include_answer=False,
-    )
-    out = []
-    for r in res.get("results", []):
-        phones = PHONE_RE.findall(r.get("content", ""))
-        out.append({
-            "name": r.get("title", "").split("|")[0].split("-")[0].strip()[:60],
-            "url": r.get("url", ""),
-            "phone": phones[0] if phones else "",
-            "snippet": r.get("content", "")[:200],
-        })
-    return out
+def discover(*_args, **_kwargs):
+    raise RuntimeError("Tavily discovery was retired; use the multi-provider call-list endpoint")

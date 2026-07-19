@@ -18,7 +18,7 @@ Decisions (made 2026-07-18, do not re-litigate):
   **+ human-in-the-loop mode** (`--human`, user answers via mic). Twilio = stretch only.
 - **Stack: Python/FastAPI backend + Lovable frontend** (prompt in `docs/LOVABLE_PROMPT.md`).
 - Credits available: ElevenLabs, OpenAI (vision doc parsing + sheet generation),
-  Tavily (call-list discovery; brief also suggests Google Places/Yelp/OSM as alternatives).
+  Google Places and Yelp (call-list discovery); OSM/Overpass needs no API key.
 
 ## Architecture in one paragraph
 
@@ -83,9 +83,17 @@ DONE and verified offline:
   `GET .../documents` lists them. Offline test: `python -m tests.documents_test`
   (parser mocked). PDF path uses OpenAI file content parts — live-tested only with
   text so far.
+- **State-wide call-list discovery** is isolated in `market_discovery/`: Google
+  Places + Yelp + OSM/Overpass adapters, full-state grid/boundary search, E.164 phone
+  normalization, cross-source dedupe and partial-failure handling. Results are cached
+  separately on the job (not in `companies`, so uncalled leads do not pollute reports).
+  Frontend contract: `POST /api/jobs/{id}/call-list/discover` and
+  `GET /api/jobs/{id}/call-list`. Offline service + authenticated endpoint test:
+  `python -m tests.market_discovery_test`.
 
 NOT yet done (needs Andrea's API keys / mic — in order):
-1. Fill `.env` (copy `.env.example`): ELEVENLABS_API_KEY, OPENAI_API_KEY, TAVILY_API_KEY.
+1. Fill `.env` (copy `.env.example`): ELEVENLABS_API_KEY, OPENAI_API_KEY,
+   GOOGLE_PLACES_API_KEY and YELP_API_KEY (OSM needs no key).
 2. `uvicorn negotiator.server:app --port 8000` + `ngrok http 8000` → set PUBLIC_BASE_URL
    in `.env` → `python -m agents.provision`. **Provisioning has never run live** — if
    ElevenLabs rejects payloads, fix `_tool_body`/`_agent_body` in `agents/provision.py`
@@ -118,6 +126,7 @@ pre-auth jobs): **demo@negotiator.app / demo1234**. Offline test:
 source .venv/bin/activate                                  # venv exists, deps installed
 python -m tests.smoke_test                                 # offline e2e check (moving)
 python -m tests.estimator_test                             # offline estimator/domain-sheet check (plumbing)
+python -m tests.market_discovery_test                      # offline call-list service + frontend API
 uvicorn negotiator.server:app --port 8000                  # API + agent-tool webhooks
 python -m agents.provision                                 # upsert agents/tools (re-run after prompt/URL changes)
 python -m negotiator.packgen --vertical hvac --area 28203  # AI-write a new domain sheet (needs OPENAI_API_KEY)

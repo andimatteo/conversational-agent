@@ -52,8 +52,8 @@ every claim linked to a conversation transcript + recording.
 
 ## 6. The kicker (15s)
 Open `verticals/moving.yaml`: "Auto body shops, freight, wedding vendors — this file
-is the only thing that changes." (Show `discovery.py` output: the real Charlotte call
-list from Tavily — where the market comes from outside the demo.)
+is the only thing that changes." (Show the Providers page: the real state-wide call
+list merged from Google Places, Yelp and OSM — where the market comes from outside the demo.)
 
 ## Failure modes to rehearse
 - Counterparty hangs up → outcome=hangup logged, report shows a documented decline. Fine.

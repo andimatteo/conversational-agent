@@ -144,7 +144,26 @@ Empty state: "No jobs yet — create one and let QuoteWise do the calling."
   - Errors: 503 "Document parsing needs the OpenAI key on the server",
     415 lists accepted formats.
 
-### 4. Call board — `/job/:jobId/calls` (poll 5s)
+### 4. Provider call list — `/job/:jobId/providers`
+This is the real-world market source for the Caller, separate from simulated demo
+personas. On page load call `GET /api/jobs/:jobId/call-list`. Show a state input,
+optional query (blank means the job's domain decides), a per-provider target, and
+fixed source badges for Google Places, Yelp and OpenStreetMap. They are mandatory,
+not checkboxes. "Build call list" calls
+`POST /api/jobs/:jobId/call-list/discover` with
+`{state, query, target_per_provider}`. State-wide discovery can take time:
+show a progress state without clearing the previously loaded list.
+
+Render `provider_status` cards with status, result count or reason. Show `total` and
+a searchable table from `items`: name, click-to-call `phone`, source chips from
+`sources`, rating/review count, city/address, and external URL. Treat one provider's
+error as partial failure when another returned data. Empty state: "Search an entire
+state to prepare the Caller's list." A 422 shows the backend detail; 502 says the
+search area could not be resolved. Show a prominent "3/3 sources complete" state
+when `complete=true`; otherwise show which mandatory source was skipped or failed and
+do not enable the Caller. A partial response has `saved=false` and is diagnostic only.
+
+### 5. Call board — `/job/:jobId/calls` (poll 5s)
 `GET /api/jobs/:jobId/companies` + `/calls` + `/quotes`.
 One row per company: name, persona style tag, latest call kind (quote/negotiate),
 outcome badge (quote=green, callback=amber, decline/hangup=gray), running quote
@@ -152,7 +171,7 @@ total. Transcript in a slide-over: chat bubbles, role "agent" = our negotiator,
 "user" = the company rep; note "recording saved" when `audio_path` exists.
 Empty state: "The Caller hasn't dialed yet."
 
-### 5. Comparison — `/job/:jobId/compare`
+### 6. Comparison — `/job/:jobId/compare`
 `GET /api/jobs/:jobId/report`.
 - Benchmark strip: `fair_low / median / fair_high` as a horizontal band,
   each company's `final_total` plotted, `red_flag_floor` as a red line.
@@ -165,7 +184,7 @@ Empty state: "The Caller hasn't dialed yet."
 - Footer "Market evidence": `market_evidence[]`.
 - Empty state: "No quotes gathered yet."
 
-### 6. Domains — `/domains`
+### 7. Domains — `/domains`
 - `GET /api/verticals` → table: display_name, vertical, area_code, file, valid ✓/✗.
 - "**Generate a domain sheet with AI**" card: vertical (slug), area_code, notes
   (textarea) → `POST /api/verticals/generate {vertical, area_code, notes}` →
